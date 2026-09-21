@@ -27,6 +27,13 @@ ymlx() {
   typeset -ga YMLX_CHAT_FLAGS=( --max-tokens 2048 --temperature 0.7 )
   typeset -ga YMLX_SERVER_FLAGS=()
 
+  # Version query: handled before the tool check so it works even on a
+  # half-broken install — reporting the version shouldn't depend on gum/uvx.
+  if [[ $# -eq 1 && "$1" == (-v|--version|-V|version) ]]; then
+    print "$(<"$_YMLX_SRC_DIR/VERSION" 2>/dev/null | tr -d '[:space:]')"
+    return 0
+  fi
+
   local cmd missing=()
   for cmd in gum curl uvx mlx_vlm.server; do
     command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
@@ -1981,7 +1988,7 @@ PY
       run)        _ymlx_headless_run      "$@" ;;
       stop)       _ymlx_headless_stop     "$@" ;;
       status)     _ymlx_headless_status   "$@" ;;
-      *) print -u2 "ymlx: unknown command '$_sub'"; print -u2 "usage: ymlx {run <model-id>|stop|status}"; return 2 ;;
+      *) print -u2 "ymlx: unknown command '$_sub'"; print -u2 "usage: ymlx {run <model-id>|stop|status|version}"; return 2 ;;
     esac
     return
   fi
