@@ -95,8 +95,10 @@ command -v gum >/dev/null 2>&1 || die "gum not on PATH after install — re-run 
 says "uv $(uv --version | awk '{print $2}'), gum installed"
 
 # ---- 4. mlx-vlm as a uv tool -------------------------------------------------
-step "Installing mlx-vlm (with jinja2)…"
-uv tool install mlx-vlm --with jinja2 || die "uv tool install mlx-vlm failed."
+# setproctitle lets ymlx rename the running server to the model name in
+# Activity Monitor / ps (see lib/sitecustomize.py).
+step "Installing mlx-vlm (with jinja2 + setproctitle)…"
+uv tool install mlx-vlm --with jinja2 --with setproctitle || die "uv tool install mlx-vlm failed."
 
 # ---- 5. Make sure uv's bin dir (~/.local/bin) is on PATH ---------------------
 step "Checking PATH…"

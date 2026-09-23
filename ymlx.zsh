@@ -275,7 +275,20 @@ CFG
         --sibling "$ministral_other"
       )
       [[ "$is_reasoning" == "1" ]] && repl_args+=( --reasoning-first )
-      python3 "$_YMLX_SRC_DIR/lib/ymlx_repl.py" "${repl_args[@]}"
+      # Run the REPL under an interpreter that can rename this process to the
+      # model name (Activity Monitor / ps) via lib/sitecustomize.py. uvx makes
+      # setproctitle importable; if it isn't reachable (e.g. offline, first
+      # run) we fall back to plain python3 — same chat, same exit codes, just
+      # no rename.
+      local libprefix="$_YMLX_SRC_DIR/lib${PYTHONPATH:+:$PYTHONPATH}"
+      if command -v uvx >/dev/null 2>&1 && \
+         YMLX_PROCTITLE="$model" PYTHONPATH="$libprefix" \
+           uvx --from setproctitle --quiet python3 -c 'import setproctitle' >/dev/null 2>&1; then
+        YMLX_PROCTITLE="$model" PYTHONPATH="$libprefix" \
+          uvx --from setproctitle --quiet python3 "$_YMLX_SRC_DIR/lib/ymlx_repl.py" "${repl_args[@]}"
+      else
+        python3 "$_YMLX_SRC_DIR/lib/ymlx_repl.py" "${repl_args[@]}"
+      fi
       rc=$?
       if (( rc != 3 )); then
         return $rc
@@ -538,9 +551,15 @@ fi
       lpid=$(lsof -iTCP:"$p" -sTCP:LISTEN -t 2>/dev/null | head -n1)
       [[ -z "$lpid" ]] && continue
       cmd=$(ps -o command= -p "$lpid" 2>/dev/null)
-      [[ "$cmd" != *"--model "* ]] && continue
-      m="${cmd#*--model }"
-      m="${m%% *}"
+      # Renamed servers (lib/sitecustomize.py setproctitle) have a command line
+      # that IS the model id; everything else is parsed from --model.
+      if [[ "$cmd" == *"--model "* ]]; then
+        m="${cmd#*--model }"
+        m="${m%% *}"
+      else
+        [[ -z "$cmd" ]] && continue
+        m="${cmd%% *}"
+      fi
       [[ -z "$m" ]] && continue
       printf '%s\t%s\t%s\n' "$lpid" "$p" "$m"
     done
@@ -583,7 +602,10 @@ fi
     local log="$log_dir/${safe}-${port}.log"
     local -a launch_flags=( "${YMLX_SERVER_FLAGS[@]}" )
     _ymlx_apply_launch_thinking launch_flags "$model" "$hub_dir"
-    mlx_vlm.server --model "$model" --port "$port" "${launch_flags[@]}" >"$log" 2>&1 &
+    # YMLX_PROCTITLE + PYTHONPATH make the server rename itself to the model
+    # name in Activity Monitor / ps (see lib/sitecustomize.py).
+    YMLX_PROCTITLE="$model" PYTHONPATH="$_YMLX_SRC_DIR/lib${PYTHONPATH:+:$PYTHONPATH}" \
+      mlx_vlm.server --model "$model" --port "$port" "${launch_flags[@]}" >"$log" 2>&1 &
     local pid=$!
     _YMLX_SESSION_PIDS+=( "$pid" )
     local rc=0
@@ -1907,7 +1929,10 @@ PY
     local log="$log_dir/${safe}-${port}.log"
     local -a launch_flags=( "${YMLX_SERVER_FLAGS[@]}" )
     _ymlx_apply_launch_thinking launch_flags "$model" "$hub_dir"
-    mlx_vlm.server --model "$model" --port "$port" "${launch_flags[@]}" >"$log" 2>&1 &!
+    # Rename this server to the model name in Activity Monitor / ps (see
+    # lib/sitecustomize.py), so heads-up monitoring shows which model is up.
+    YMLX_PROCTITLE="$model" PYTHONPATH="$_YMLX_SRC_DIR/lib${PYTHONPATH:+:$PYTHONPATH}" \
+      mlx_vlm.server --model "$model" --port "$port" "${launch_flags[@]}" >"$log" 2>&1 &!
     local pid=$!
     print "ymlx: starting $model on :$port (pid $pid) — log: $log"
     local i
