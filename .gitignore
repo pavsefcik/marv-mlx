@@ -3,3 +3,6 @@ node_modules/
 package-lock.json
 __pycache__/
 *.pyc
+
+# local-only git cheatsheet (never committed / pushed to GitHub)
+GIT-CHEATSHEET.md
