@@ -182,3 +182,51 @@ _ymlx_apply_launch_thinking() {
     _ymlx_replace_or_append "$name" --thinking-end-token "[/THINK]"
   fi
 }
+
+# _ymlx_purge_orphan_blobs <hub_dir>
+# After a model folder is rm -rf'd, its large weight blobs may still sit in the
+# shared store hub/blobs/{shard}/. This sweeps that store and removes any blob
+# no cached model folder still references via a symlink (deduplicated across
+# the whole hub). Also removes the blob's .refs and .lock sidecars.
+# Prints a summary of what was freed; non-fatal if the store isn't present.
+_ymlx_purge_orphan_blobs() {
+  local hub_dir="$1"
+  # Canonicalize early so later realpath output (/private/tmp on macOS) matches
+  # the hub_dir-derived blob paths below.
+  hub_dir="$(/bin/realpath "$hub_dir" 2>/dev/null)"
+  [[ -d "$hub_dir/blobs" ]] || return 0
+  setopt localoptions null_glob
+
+  # Build the set of blob paths still referenced by any symlink in model dirs.
+  # realpath resolves the full chain: snapshot -> model blobs -> shared store.
+  local -A used=()
+  local link real
+  while IFS= read -r link; do
+    [[ -n "$link" ]] || continue
+    real="$(/bin/realpath "$link" 2>/dev/null)"
+    [[ -n "$real" ]] && used[$real]=1
+  done < <(find "$hub_dir"/models--* -type l 2>/dev/null)
+
+  local shard blob base size
+  local removed=0 freed_bytes=0
+  for shard in "$hub_dir"/blobs/*/; do
+    [[ -d "$shard" ]] || continue
+    for blob in "$shard"*; do
+      [[ -f "$blob" ]] || continue
+      base="${blob:t}"
+      # skip shared-store sidecars / marker; only real data blobs
+      [[ "$base" == *.refs || "$base" == *.lock ]] && continue
+      if [[ -z "${used[$blob]}" ]]; then
+        size="$(/usr/bin/stat -f%z "$blob" 2>/dev/null)"
+        size="${size:-0}"
+        freed_bytes=$(( freed_bytes + size ))
+        rm -f "$blob" "${blob}.refs" "${blob}.lock"
+        removed=$(( removed + 1 ))
+      fi
+    done
+  done
+
+  if (( removed > 0 )); then
+    print -r -- "Freed $removed orphaned shared blob(s): $freed_bytes bytes"
+  fi
+}

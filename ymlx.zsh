@@ -542,6 +542,15 @@ if [[ -z "$HF_TOKEN" && -s "$(_ymlx_hf_token_file)" ]]; then
   export HF_TOKEN="$(<"$(_ymlx_hf_token_file)")"
 fi
 
+# Keep weight blobs inside each model's own folder (models--org--name/blobs/)
+# instead of huggingface_hub's cache-wide shared store (hub/blobs/<hex>/).
+# huggingface_hub >=1.33 runs that Xet-backed shared-blob store by default,
+# so non-git files (large .safetensors, tokenizers) get deduplicated at the
+# hub root and a model folder only keeps symlinks to it — which reads as a
+# weird download if, like ymlx, you want each cache entry to be self-contained.
+# Disable it so huggingface_hub stores those blobs as regular files under the model dir.
+export HF_HUB_DISABLE_SHARED_BLOBS=1
+
   # Discover running mlx_vlm.server instances on ymlx's ports (11500-11509) by
   # asking the OS, not a state file. Emits one TSV line per server:
   # pid<TAB>port<TAB>model. The model id is parsed from the process's --model arg.
@@ -1672,6 +1681,10 @@ PY
         done
         rm -f "$state_dir/ministral-default"
         echo "Removed: $name"
+        # The model folders above only held symlinks; the real weights live in
+        # the shared hub/blobs/ store. Sweep it so blobs orphaned by this
+        # removal (no longer referenced by any cached model) free their space.
+        _ymlx_purge_orphan_blobs "$hub_dir"
         _ymlx_pause
       fi
     fi
