@@ -98,19 +98,45 @@ says "uv $(uv --version | awk '{print $2}'), gum installed"
 # setproctitle lets ymlx rename the running server to the model name in
 # Activity Monitor / ps (see lib/sitecustomize.py).
 step "Installing mlx-vlm (with jinja2 + setproctitle)…"
-uv tool install mlx-vlm --with jinja2 --with setproctitle || die "uv tool install mlx-vlm failed."
+# Resolve uv's tool bin dir up front (reused by step 5). We pass --bin-dir
+# explicitly so the shims land in exactly the directory the rest of the script
+# wires to, regardless of how uv was installed (brew vs standalone) or which
+# XDG_*/UV_* env vars happen to be set on the machine.
+UV_TOOL_BIN="$(uv tool dir --bin 2>/dev/null || printf '%s/.local/bin' "$HOME")"
+install_mlx_vlm() {
+  uv tool install mlx-vlm --with jinja2 --with setproctitle --bin-dir "$UV_TOOL_BIN"
+}
+# The mlx-vlm tool is large and network-bound; retry a couple of times before
+# giving up.
+attempt=0
+while ! install_mlx_vlm; do
+  attempt=$((attempt + 1))
+  if [ "$attempt" -ge 3 ]; then
+    die "uv tool install mlx-vlm failed after $attempt attempts."
+  fi
+  says "mlx-vlm install failed — retrying (attempt $attempt)…"
+done
+# Verify the shim actually appears where we expect it after install.
+command -v mlx_vlm.server >/dev/null 2>&1 || [ -x "$UV_TOOL_BIN/mlx_vlm.server" ] || \
+  die "mlx_vlm.server missing after install (expected at $UV_TOOL_BIN)."
 
-# ---- 5. Make sure uv's bin dir (~/.local/bin) is on PATH ---------------------
+# ---- 5. Make sure uv's tool bin dir is on PATH ------------------------------------
+# Don't assume ~/.local/bin: uv's tool executable dir is configurable (UV_TOOL_BIN_DIR,
+# XDG_BIN_HOME, XDG_DATA_HOME) and defaults to the first resolution on that list before
+# ~/.local/bin. Ask uv where it really installs tool scripts.
 step "Checking PATH…"
+# UV_TOOL_BIN was already resolved in step 4 (before the mlx-vlm install).
 if ! command -v mlx_vlm.server >/dev/null 2>&1; then
-  if [ -f "$HOME/.local/bin/mlx_vlm.server" ]; then
-    if ! grep -q 'local/bin' "$HOME/.zshrc" 2>/dev/null; then
-      printf 'export PATH="$HOME/.local/bin:$PATH"\n' >> "$HOME/.zshrc"
-      says "appended ~/.local/bin to ~/.zshrc"
+  if [ -f "$UV_TOOL_BIN/mlx_vlm.server" ]; then
+    if ! printf '%s' "$PATH" | grep -qF "$UV_TOOL_BIN"; then
+      if ! grep -qF "$UV_TOOL_BIN" "$HOME/.zshrc" 2>/dev/null; then
+        printf 'export PATH="%s:$PATH"\n' "$UV_TOOL_BIN" >> "$HOME/.zshrc"
+        says "appended $UV_TOOL_BIN to ~/.zshrc"
+      fi
     fi
-    says "mlx_vlm.server found at ~/.local/bin — open a new terminal before running ymlx."
+    says "mlx_vlm.server found at $UV_TOOL_BIN — open a new terminal before running ymlx."
   else
-    die "mlx_vlm.server is not on PATH and not at ~/.local/bin — something went wrong."
+    die "mlx_vlm.server is not on PATH and not at $UV_TOOL_BIN — something went wrong (uv tool dir --bin = $UV_TOOL_BIN)."
   fi
 else
   says "mlx_vlm.server on PATH ✓"
