@@ -98,14 +98,15 @@ says "uv $(uv --version | awk '{print $2}'), gum installed"
 # setproctitle lets ymlx rename the running server to the model name in
 # Activity Monitor / ps (see lib/sitecustomize.py).
 step "Installing mlx-vlm (with jinja2 + setproctitle)…"
-# Resolve uv's tool bin dir up front (reused by step 5). We deliberately do NOT
-# pin uv to ~/.local/bin — its executable dir is configurable (UV_TOOL_BIN_DIR,
-# XDG_BIN_HOME, XDG_DATA_HOME) and depends on how uv was installed. Instead we
-# ask uv where it will place shims and wire that exact dir into PATH later. A
-# plain `uv tool install` links into UV_TOOL_BIN on its own.
+# Resolve uv's tool + bin dirs up front (reused by step 5). We deliberately do
+# NOT pin uv to ~/.local/bin — its dirs are configurable (UV_TOOL_BIN_DIR,
+# XDG_BIN_HOME, XDG_DATA_HOME) and depend on how uv was installed — so we ask
+# uv where it will place things and wire that into PATH later. Pin the package
+# version for reproducible resolver behavior.
 UV_TOOL_BIN="$(uv tool dir --bin 2>/dev/null || printf '%s/.local/bin' "$HOME")"
+UV_TOOL_DIR="$(uv tool dir 2>/dev/null || printf '%s/.local/share/uv/tools' "$HOME")"
 install_mlx_vlm() {
-  uv tool install mlx-vlm --with jinja2 --with setproctitle
+  uv tool install "mlx-vlm@0.7.4" --with jinja2 --with setproctitle --force
 }
 # The mlx-vlm tool is large and network-bound; retry a couple of times before
 # giving up.
@@ -117,9 +118,22 @@ while ! install_mlx_vlm; do
   fi
   says "mlx-vlm install failed — retrying (attempt $attempt)…"
 done
-# Verify the shim actually appears where we expect it after install.
+# uv occasionally fails to link every console script (a uv linking/cleanup quirk)
+# — we've seen it link only convert+generate and skip mlx_vlm.server. ymlx needs
+# `mlx_vlm.server`, so synthesize it from the tool env if uv didn't link it.
+if ! [ -x "$UV_TOOL_BIN/mlx_vlm.server" ] && ! command -v mlx_vlm.server >/dev/null 2>&1; then
+  mkdir -p "$UV_TOOL_BIN"
+  cat > "$UV_TOOL_BIN/mlx_vlm.server" <<SHIM
+#!/usr/bin/env bash
+# ymlx fallback shim — uv didn't link mlx_vlm.server; run the tool env module.
+exec "$UV_TOOL_DIR/mlx-vlm/bin/python" -m mlx_vlm.server "\$@"
+SHIM
+  chmod +x "$UV_TOOL_BIN/mlx_vlm.server"
+  says "created mlx_vlm.server shim in $UV_TOOL_BIN (uv did not link it)"
+fi
+# Verify the server command is usable after install.
 command -v mlx_vlm.server >/dev/null 2>&1 || [ -x "$UV_TOOL_BIN/mlx_vlm.server" ] || \
-  die "mlx_vlm.server missing after install (expected at $UV_TOOL_BIN)."
+  die "mlx_vlm.server is not available after install (expected at $UV_TOOL_BIN)."
 
 # ---- 5. Make sure uv's tool bin dir is on PATH ------------------------------------
 # Don't assume ~/.local/bin: uv's tool executable dir is configurable (UV_TOOL_BIN_DIR,
