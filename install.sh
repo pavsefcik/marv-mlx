@@ -98,13 +98,14 @@ says "uv $(uv --version | awk '{print $2}'), gum installed"
 # setproctitle lets ymlx rename the running server to the model name in
 # Activity Monitor / ps (see lib/sitecustomize.py).
 step "Installing mlx-vlm (with jinja2 + setproctitle)…"
-# Resolve uv's tool bin dir up front (reused by step 5). We pass --bin-dir
-# explicitly so the shims land in exactly the directory the rest of the script
-# wires to, regardless of how uv was installed (brew vs standalone) or which
-# XDG_*/UV_* env vars happen to be set on the machine.
+# Resolve uv's tool bin dir up front (reused by step 5). We deliberately do NOT
+# pin uv to ~/.local/bin — its executable dir is configurable (UV_TOOL_BIN_DIR,
+# XDG_BIN_HOME, XDG_DATA_HOME) and depends on how uv was installed. Instead we
+# ask uv where it will place shims and wire that exact dir into PATH later. A
+# plain `uv tool install` links into UV_TOOL_BIN on its own.
 UV_TOOL_BIN="$(uv tool dir --bin 2>/dev/null || printf '%s/.local/bin' "$HOME")"
 install_mlx_vlm() {
-  uv tool install mlx-vlm --with jinja2 --with setproctitle --bin-dir "$UV_TOOL_BIN"
+  uv tool install mlx-vlm --with jinja2 --with setproctitle
 }
 # The mlx-vlm tool is large and network-bound; retry a couple of times before
 # giving up.
