@@ -6,6 +6,17 @@ sync across `VERSION`, `package.json`, the Homebrew formula, and the README.
 
 ## [Unreleased]
 
+## [0.133.0] - 2026-10-01
+
+### Changed
+- **Leaner mlx-vlm tool env (`install.sh`).** New step 4b prunes the unused
+  data-science stack (`datasets` → `pandas`/`pyarrow`, ~160 MB) from the
+  mlx-vlm uv tool env. mlx-vlm 0.7.4 no longer hard-depends on `datasets` (it
+  moved to the `train` extra), so a fresh install is already lean; this clears
+  the dead weight left behind by older installs / `uv tool update` transitions.
+  VLM/audio-facing deps (`opencv`/cv2, `scipy`, `mlx-audio`, `llguidance`) are
+  deliberately kept: unlike text-only wren, ymlx serves vision and audio models.
+
 ## [0.132.3] - 2026-09-29
 
 ### Fixed

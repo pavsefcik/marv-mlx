@@ -135,6 +135,21 @@ fi
 command -v mlx_vlm.server >/dev/null 2>&1 || [ -x "$UV_TOOL_BIN/mlx_vlm.server" ] || \
   die "mlx_vlm.server is not available after install (expected at $UV_TOOL_BIN)."
 
+# --- 4b. Prune unused heavy deps (keep the tool env lean) ----------------------
+# Older mlx-vlm releases listed `datasets` (-> pandas/pyarrow, ~160MB) as an
+# unconditional dep. 0.7.4 moved it to the `train` extra, but a `uv tool update`
+# from such an older install (or any stale/extra'd env) can leave that
+# data-science weight behind. wren-style, strip it — it is never used at
+# inference/server runtime. We deliberately KEEP opencv/cv2, scipy and mlx-audio:
+# unlike text-only wren, ymlx serves VLM/audio/grammar models that depend on them.
+prune_tool_bloat() {
+  local py="$UV_TOOL_DIR/mlx-vlm/bin/python"
+  [ -x "$py" ] || return 0
+  uv pip uninstall --python "$py" -q datasets pandas pyarrow 2>/dev/null || true
+}
+prune_tool_bloat
+says "pruned unused data-science deps (datasets/pandas/pyarrow)"
+
 # ---- 5. Make sure uv's tool bin dir is on PATH ------------------------------------
 # Don't assume ~/.local/bin: uv's tool executable dir is configurable (UV_TOOL_BIN_DIR,
 # XDG_BIN_HOME, XDG_DATA_HOME) and defaults to the first resolution on that list before

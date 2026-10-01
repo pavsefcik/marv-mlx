@@ -1,6 +1,6 @@
 {
   "name": "ymlx",
-  "version": "0.132.3",
+  "version": "0.133.0",
   "description": "Local MLX LLM manager for Apple Silicon, plus the ymlx-sync pi extension (model sync + headless `ymlx run` on :11500)",
   "license": "MIT",
   "keywords": ["pi-package", "mlx", "llm", "local-ai"],
