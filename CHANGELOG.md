@@ -4,6 +4,17 @@ All notable changes to ymlx are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Version numbers are kept in
 sync across `VERSION`, `package.json`, the Homebrew formula, and the README.
 
+## [0.134.0] - 2026-10-02
+
+### Changed
+- **No more auto-update of mlx-vlm on interactive start (`ymlx.zsh`).** Dropped
+  `_ymlx_check_mlx_vlm_update`, which ran `uv tool update mlx-vlm` whenever
+  `uv tool list --outdated` reported a newer release. ymlx now runs whatever
+  mlx-vlm version is installed; update it yourself with `uv tool update mlx-vlm`.
+
+The ymlx self-update *notice* (`_ymlx_check_update`, interactive only) is
+unchanged — it only prints when a new ymlx release exists, it never installs.
+
 ## [Unreleased]
 
 ## [0.133.0] - 2026-10-01
