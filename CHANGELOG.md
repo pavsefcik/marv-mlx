@@ -4,7 +4,14 @@ All notable changes to ymlx are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Version numbers are kept in
 sync across `VERSION`, `package.json`, the Homebrew formula, and the README.
 
-## [Unreleased]
+## [0.135.1] - 2026-10-06
+
+### Fixed
+- **No more stray blinking cursor in the TUI (`ymlx.zsh`).** Every key-driven
+  list (main menu, Download menu, Chat history) now hides the terminal cursor
+  while it paints and restores it in the matching clear path, so quitting the
+  menu no longer leaves a blinking block parked on the blank line under the
+  footer. Sub-screens (gum prompts, the chat REPL) still get a visible cursor.
 
 ## [0.135.0] - 2026-10-06
 

@@ -814,6 +814,9 @@ export HF_HUB_DISABLE_SHARED_BLOBS=1
       (( scroll < 0 )) && scroll=0
     }
     _D_render() {
+      # Hide the terminal cursor while the list is painted (it would otherwise
+      # blink on the blank line under the footer); _D_clear shows it again.
+      print -n -- $'\e[?25l'
       if (( drawn )); then
         print -n -- "\033[${nlines}A\033[J"
       fi
@@ -844,6 +847,7 @@ export HF_HUB_DISABLE_SHARED_BLOBS=1
         print -n -- "\033[${nlines}A\033[J"
         drawn=0
       fi
+      print -n -- $'\e[?25h'
     }
     _D_move() {
       local delta="$1" n=${#ROWS[@]} new=$cursor guard=$cursor
@@ -998,6 +1002,8 @@ export HF_HUB_DISABLE_SHARED_BLOBS=1
     }
 
     _H_render() {
+      # Hide the terminal cursor while the list is painted; _H_clear shows it.
+      print -n -- $'\e[?25l'
       if (( _H_DRAWN )); then
         print -n -- "\033[${_H_NLINES}A\033[J"
       fi
@@ -1036,6 +1042,7 @@ export HF_HUB_DISABLE_SHARED_BLOBS=1
         print -n -- "\033[${_H_NLINES}A\033[J"
         _H_DRAWN=0
       fi
+      print -n -- $'\e[?25h'
     }
 
     _H_move() {
@@ -1414,6 +1421,11 @@ PY
 
   _ymlx_main_render() {
     local i idx line prefix kind n end footer has_running=0
+    # The menu repaints by moving the cursor up and clearing; without hiding it
+    # the terminal's blinking cursor would park on the empty line under the
+    # footer (the "flashing square"). _ymlx_main_clear restores it before any
+    # sub-screen (gum dialogs, the chat REPL) so those keep a visible cursor.
+    print -n -- $'\e[?25l'
     if (( _YMLX_MENU_DRAWN )); then
       print -n -- "\033[${_YMLX_MENU_NLINES}A\033[J"
     fi
@@ -1466,6 +1478,9 @@ PY
       print -n -- "\033[${_YMLX_MENU_NLINES}A\033[J"
       _YMLX_MENU_DRAWN=0
     fi
+    # Always give the cursor back, even if nothing was drawn (it may have been
+    # hidden by a render that was then cleared off-screen).
+    print -n -- $'\e[?25h'
   }
 
   _ymlx_main_header() {
