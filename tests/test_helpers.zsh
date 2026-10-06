@@ -67,4 +67,97 @@ _ymlx_apply_launch_thinking flags acme/Qwen3.5-9B "$hub"
 check "0" "$(( ${flags[(I)--enable-thinking]} > 0 ))" "qwen default: stale flag dropped"
 check "0" "$(( ${flags[(I)--thinking-start-token]} > 0 ))" "qwen: no bracket markers"
 
+# --- CLI plumbing helpers -----------------------------------------------------
+# `filters` / `replace` stand in for a hub dir listing: they let us exercise
+# _ymlx_json_escape without touching the filesystem.
+check 'org/Model' "$(_ymlx_json_escape 'org/Model')" "json: plain string"
+check 'a\"b'   "$(_ymlx_json_escape 'a"b')"     "json: quote escaped"
+check 'a\\b'   "$(_ymlx_json_escape 'a\b')"     "json: backslash escaped"
+check 'a\nb'   "$(_ymlx_json_escape $'a\nb')"   "json: newline escaped"
+check 'a\tb'   "$(_ymlx_json_escape $'a\tb')"   "json: tab escaped"
+
+# Alternate-screen state machine: enter/leave are idempotent and leave() must
+# actually emit the restore sequence when we own the terminal.
+_YMLX_TUI_ACTIVE=0
+_ymlx_tui_enter >/dev/null
+check 1 "$_YMLX_TUI_ACTIVE" "tui: enter sets active"
+_ymlx_tui_enter >/dev/null   # second call must not re-emit
+_ymlx_tui_leave >/dev/null
+check 0 "$_YMLX_TUI_ACTIVE" "tui: leave clears active"
+out=$(_ymlx_tui_leave; print -n X)
+check X "$out" "tui: leave is idempotent"
+out=$(_YMLX_TUI_ACTIVE=1 _ymlx_tui_leave; print -n X)
+check X "${out##*$'\e[?1049l'}" "tui: leave emits restore when active"
+
+_ymlx_usage | grep -q 'ymlx download' \
+  && print "ok: usage lists download" \
+  || { print -u2 "FAIL: usage missing download"; fail=1 }
+
+# --- Catalog parser -----------------------------------------------------------
+# Current 2-line format: id + tagline. Also legacy 3-line title-first blocks.
+cat > "$hub/cat.md" <<'CAT'
+8 GB RAM Tier Models
+
+acme/Tiny-4B
+The compact generalist
+
+acme/Pair-A & acme/Pair-B
+The paired one
+
+
+16 GB RAM Tier Models
+
+Legacy Title Here
+acme/Legacy-9B
+t3, vision
+CAT
+
+# Field order is tier<US>tier_name<US>title<US>ids<US>tags<US>description. Read
+# with US as IFS: a tab IFS would collapse the empty tags field and shift the
+# tagline.
+catalog_rows() { _ymlx_parse_catalog "$hub/cat.md"; }
+row1=$(catalog_rows | sed -n 1p)
+IFS=$'\x1f' read -r t tname title ids tags desc <<< "$row1"
+check 8 "$t" "catalog: tier"
+check '8 GB RAM Tier Models' "$tname" "catalog: tier header kept verbatim"
+check acme/Tiny-4B "$title" "catalog: entry name is the model id"
+check acme/Tiny-4B "$ids" "catalog: id"
+check '' "$tags" "catalog: no tags (2-line format)"
+check 'The compact generalist' "$desc" "catalog: tagline -> description"
+
+row2=$(catalog_rows | sed -n 2p)
+IFS=$'\x1f' read -r t tname title ids tags desc <<< "$row2"
+check 'acme/Pair-A & acme/Pair-B' "$ids" "catalog: paired ids kept"
+check acme/Pair-A "$title" "catalog: paired name = first id"
+check 'The paired one' "$desc" "catalog: paired tagline"
+
+row3=$(catalog_rows | sed -n 3p)
+IFS=$'\x1f' read -r t tname title ids tags desc <<< "$row3"
+check 16 "$t" "catalog: second tier parsed"
+check '16 GB RAM Tier Models' "$tname" "catalog: second tier header"
+check 'Legacy Title Here' "$title" "catalog: legacy title-first block"
+check acme/Legacy-9B "$ids" "catalog: legacy id"
+check 't3, vision' "$tags" "catalog: legacy tags"
+check '' "$desc" "catalog: legacy desc empty"
+
+# Legacy id/tags 2-line block (no title line) still resolves.
+cat > "$hub/cat2.md" <<'CAT'
+8 GB RAM Tier Models
+
+acme/Old-4B
+t3
+CAT
+old=$( _ymlx_parse_catalog "$hub/cat2.md" )
+IFS=$'\x1f' read -r t tname title ids tags desc <<< "$old"
+check 'acme/Old-4B' "$ids" "catalog: legacy id-only block"
+check 'acme/Old-4B' "$title" "catalog: legacy id-only name"
+check 't3' "$tags" "catalog: legacy id-only tags"
+
+# Empty catalog is not an error.
+: > "$hub/empty.md"
+check '' "$(_ymlx_parse_catalog "$hub/empty.md")" "catalog: empty file -> no rows"
+
+# The US delimiter round-trips a field containing spaces and slashes.
+check 6 "$(print -r -- "$row1" | awk -F$'\x1f' '{print NF}')" "catalog: exactly 6 fields"
+
 exit $fail

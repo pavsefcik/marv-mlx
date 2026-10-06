@@ -60,6 +60,46 @@ Run it from any terminal with:
 ymlx
 ```
 
+Quitting restores your previous screen (ymlx runs on the terminal's alternate
+screen buffer) and signs off at the top of a fresh screen with an
+`▌▌ YMLX says bye!` line.
+
+## Commands
+
+Besides the TUI, `ymlx` is a normal command-line tool with data on stdout and
+logs on stderr, so it composes with scripts, agents and other programs.
+
+```sh
+ymlx                        # interactive TUI
+ymlx run <model>            # start a model on :11500 (detached) and wait until ready
+ymlx chat <model>           # start a model and open the built-in chat REPL
+ymlx stop [<model>|--all]   # stop a model (default: the one on :11500)
+ymlx status [--json]        # what is running
+ymlx list [--json]          # locally installed models
+ymlx download <model>...    # download model(s) from the HuggingFace Hub
+ymlx curated [--json]       # the full curated catalog, all RAM tiers
+ymlx info <model> [--json]  # size, family, thinking spec, path
+ymlx endpoint [--json]      # base URL / model of the running server
+```
+
+Hidden aliases: `ymlx serve` = `run`, `ymlx curator` = `curated`,
+`ymlx ls` = `list`.
+
+Example — see what's running, then hit it:
+
+```sh
+ymlx status --json
+# {"model":"mlx-community/Qwen3.5-4B-MLX-4bit","port":11500,"pid":12345,"base_url":"http://127.0.0.1:11500/v1"}
+
+curl -s http://127.0.0.1:11500/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"mlx-community/Qwen3.5-4B-MLX-4bit","messages":[{"role":"user","content":"hi"}]}'
+```
+
+Machine-readable output (`--json`) and a stable exit-code contract — `0` ok,
+`1` failure, `2` usage error — make ymlx safe to drive from the `ymlx-sync` pi
+extension or your own tooling.
+
 ## Use
 
 - Start model and run — Enter starts the highlighted model and drops straight
@@ -103,4 +143,4 @@ ymlx checks GitHub for a newer version at every launch; when one exists a
 **Update to latest version** entry that pulls and reinstalls in place (a
 pi-managed install instead guides you to `pi update`; a curl/managed copy is
 refreshed from GitHub automatically). Installed version lives
-in the repo-root `VERSION` file (semver, currently 0.134.0).
+in the repo-root `VERSION` file (semver, currently 0.135.0).

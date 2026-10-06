@@ -70,6 +70,15 @@ ymlx() {
   local curated_mirror="https://github.com/pavsefcik/ymlx-curator/raw/main/ymlx-curator.md"
   local curated_file="$state_dir/curated-llms.md"
   local curated_tmp="$curated_file.tmp" curated_refreshed=0 attempt
+  # CLI verbs that don't need the Download menu skip the fetch entirely, so they
+  # stay fast and work offline (status/list/info/stop/chat/run/…) before dispatch.
+  # `curated` is deliberately absent: it IS the catalog command, so it wants the
+  # fresh list (and falls back to the cache offline).
+  local _YMLX_NEEDS_CURATED=1
+  case "${1:-}" in
+    status|list|ls|info|endpoint|stop|run|serve|chat|download|version|-v|--version|-V|help|-h|--help) _YMLX_NEEDS_CURATED=0 ;;
+  esac
+  if (( _YMLX_NEEDS_CURATED )); then
   for attempt in 1 2 3; do
     if curl -fsSL --connect-timeout 8 --max-time 20 "$curated_url" -o "$curated_tmp" 2>/dev/null \
        && [[ -s "$curated_tmp" ]]; then
@@ -91,6 +100,7 @@ ymlx() {
       print -u2 "ymlx: couldn't refresh the curated model list — using the cached copy."
     fi
   fi
+  fi  # _YMLX_NEEDS_CURATED
   rm -f "$curated_tmp"
 
   _ymlx_write_default_config() {
@@ -588,8 +598,12 @@ export HF_HUB_DISABLE_SHARED_BLOBS=1
 
   _ymlx_stop_all() {
     local pid port model
+    _YMLX_BYE_STOPPED=0
     while IFS=$'\t' read -r pid port model; do
-      [[ -n "$pid" ]] && kill "$pid" 2>/dev/null && echo "Stopped: $model (:$port)"
+      if [[ -n "$pid" ]] && kill "$pid" 2>/dev/null; then
+        echo "Stopped: $model (:$port)"
+        (( _YMLX_BYE_STOPPED++ ))
+      fi
     done < <(_ymlx_running)
     _YMLX_SESSION_PIDS=()
   }
@@ -695,62 +709,24 @@ export HF_HUB_DISABLE_SHARED_BLOBS=1
     models=$(ls "$hub_dir" 2>/dev/null | grep '^models--' | sed 's/models--//' | sed 's/--/\//g')
     for m in ${(f)models}; do installed[$m]=1; done
 
-    # ---- Parse the curated list. New format: blank-line-separated blocks of up
-    # to 3 lines (model, tags, optional description). Entries may be commented
-    # with a leading '#' — we strip it so every entry shows up (the '#' keeps the
-    # full catalog alongside the highlighted picks). The 3rd line for the
-    # highlighted entries is used as the description shown under the model.
-    # Tier headers are any line containing "GB RAM".
+    # ---- Parse the curated list through the shared catalog parser (all tiers),
+    # then keep only this machine's tier. The parser turns each 2-line block
+    # (id + tagline) into a title (the id's basename) plus a description, and
+    # strips any leading '#' so entries commented out in the source still show.
     typeset -A tier_header
     local -a p_title=() p_sub=() p_tags=() p_desc=() p_tier=()
-    local line current_tier=0 header num
     if [[ -r "$curated_file" ]]; then
-      local -a entry=()
-      _D_flush() {
-        ((${#entry[@]})) || return
-        local a="${entry[1]}" b="${entry[2]:-}" c="${entry[3]:-}"
-        entry=()
-        [[ -n "$a" ]] || return
-        (( current_tier == tier_active )) || return
-        local title="" sub="" tags="" desc=""
-        if [[ "$a" == */* ]]; then
-          # legacy 2/3-line block: model id, tags, optional desc
-          sub="$a"; tags="$b"; desc="$c"
-        else
-          # current 3-line block: title (+flag), model id(s), tags
-          title="$a"; sub="$b"; tags="$c"
-        fi
-        # Hide the block only if every model in it is already installed. A
-        # Ministral pair (id & id2) hides once BOTH are present.
-        local -a dl=( ${(s: & :)sub} ) m
+      while IFS=$'\x1f' read -r c_tier _c_tname c_title c_ids c_tags c_desc; do
+        [[ "$c_tier" == "$tier_active" ]] || continue
+        local -a dl=( ${(s: & :)c_ids} ) m
         local allinst=1
         for m in "${dl[@]}"; do
           [[ -n "${installed[$m]}" ]] || { allinst=0; break; }
         done
-        (( allinst )) && return
-        p_title+=( "$title" ); p_sub+=( "$sub" ); p_tags+=( "$tags" )
-        p_desc+=( "$desc" ); p_tier+=( "$current_tier" )
-      }
-      while IFS= read -r line || [[ -n "$line" ]]; do
-        if [[ -z "$line" ]]; then
-          _D_flush
-          continue
-        fi
-        if [[ "$line" == *"GB RAM"* ]]; then
-          _D_flush
-          header="$line"
-          num="${header//[^0-9]/}"
-          tier_header[$num]="$header"
-          current_tier=$num
-          continue
-        fi
-        if [[ "$line" == \#* ]]; then
-          line="${line#\#}"
-          line="${line#"${line%%[![:space:]]*}"}"
-        fi
-        entry+=( "$line" )
-      done < "$curated_file"
-      _D_flush
+        (( allinst )) && continue
+        p_title+=( "$c_title" ); p_sub+=( "$c_ids" ); p_tags+=( "$c_tags" )
+        p_desc+=( "$c_desc" ); p_tier+=( "$c_tier" )
+      done < <(_ymlx_parse_catalog "$curated_file")
     fi
 
     # Deduplicate by the model/sub line, keeping the first occurrence.
@@ -778,12 +754,15 @@ export HF_HUB_DISABLE_SHARED_BLOBS=1
     (( max_w < 12 )) && max_w=12
     local -a ROWS=() RCUR=() RSRC=() RTITLE=() RDIM=()
     for (( i=1; i<=${#srcs[@]}; i++ )); do
-      # Show the curated title (+flag); fall back to the model basename for
-      # legacy blocks that carry no title line. Left-pad titles so the
-      # '// tags' column is aligned across rows.
+      # Primary row: the entry title (the model id's basename), plus a legacy
+      # '// tags' column when the source still carries tags.
       title="${titles[$i]}"
       [[ -n "$title" ]] || title="${srcs[$i]##*/}"
-      tline=$(printf '  %-*s  // %s' "$max_w" "$title" "${tags[$i]}")
+      if [[ -n "${tags[$i]}" ]]; then
+        tline=$(printf '  %-*s  // %s' "$max_w" "$title" "${tags[$i]}")
+      else
+        tline="  $title"
+      fi
       ROWS+=( "$tline" ); RCUR+=( 1 ); RSRC+=( "${srcs[$i]}" ); RTITLE+=( "$title" ); RDIM+=( 0 )
       if [[ -n "${descs[$i]}" ]]; then
         ROWS+=( "    ${descs[$i]}" ); RCUR+=( 0 ); RSRC+=( "" ); RTITLE+=( "" ); RDIM+=( 1 )
@@ -1965,6 +1944,31 @@ PY
   }
 
   _ymlx_headless_stop() {
+    local want="${1:-}"
+    # ymlx stop            -> the model on :11500
+    # ymlx stop <model>    -> that model, wherever it runs
+    # ymlx stop --all      -> every ymlx server on :11500–:11509
+    if [[ "$want" == "--all" ]]; then
+      local n=0 pid port model
+      while IFS=$'\t' read -r pid port model; do
+        [[ -n "$pid" ]] && kill "$pid" 2>/dev/null && { print "ymlx: stopped $model (:$port)"; (( n++ )); }
+      done < <(_ymlx_running)
+      (( n == 0 )) && print "ymlx: nothing running"
+      return 0
+    fi
+    if [[ -n "$want" ]]; then
+      local n=0 pid port model
+      while IFS=$'\t' read -r pid port model; do
+        if [[ "$model" == "$want" ]]; then
+          kill "$pid" 2>/dev/null && { print "ymlx: stopped $model (:$port)"; (( n++ )); }
+        fi
+      done < <(_ymlx_running)
+      if (( n == 0 )); then
+        print -u2 "ymlx: no running server for '$want'"
+        return 1
+      fi
+      return 0
+    fi
     if [[ -n "$(_ymlx_running_model)" ]]; then
       local pid port cur
       read -r pid port cur <<< "$(_ymlx_running_model)"
@@ -1976,37 +1980,287 @@ PY
   }
 
   _ymlx_headless_status() {
+    local json=0
+    [[ "$1" == "--json" ]] && json=1
     if [[ -n "$(_ymlx_running_model)" ]]; then
       local pid port cur
       read -r pid port cur <<< "$(_ymlx_running_model)"
-      print "$cur\t:$port\tpid $pid"
+      if (( json )); then
+        printf '{"model":"%s","port":%s,"pid":%s,"base_url":"http://127.0.0.1:%s/v1"}\n' \
+          "$(_ymlx_json_escape "$cur")" "$port" "$pid" "$port"
+      else
+        print "$cur\t:$port\tpid $pid"
+      fi
       return 0
     fi
-    print "none"
+    if (( json )); then print 'null'; else print "none"; fi
     return 1
   }
 
-  # ---- headless (non-interactive) mode --------------------------
-  # ``ymlx <sub> [args]`` runs and exits without the TUI. Designed for
-  # automation (pi's model_select hook), so servers are DETACHED: they must
-  # survive this shell exiting, so we clear the EXIT trap, never add the pid
-  # to _YMLX_SESSION_PIDS, and disown it.
+  _ymlx_headless_list() {
+    local json=0
+    [[ "$1" == "--json" ]] && json=1
+    local -a models=( "$hub_dir"/models--*(N/) )
+    local -a ids=()
+    local m id
+    for m in "${models[@]}"; do
+      id="${${m:t}#models--}"; ids+=( "${id//--//}" )
+    done
+    # LC_ALL=C pins byte order so scripts see the same order on any machine
+    # (zsh's (o) flag follows the locale and varies between hosts).
+    local -a sorted=()
+    if (( ${#ids[@]} )); then
+      sorted=( ${(f)"$(printf '%s\n' "${ids[@]}" | LC_ALL=C sort)"} )
+    fi
+    if (( json )); then
+      print -n '['
+      local first=1
+      for id in "${sorted[@]}"; do
+        (( first )) || print -n ','
+        first=0
+        print -n "\"$(_ymlx_json_escape "$id")\""
+      done
+      print ']'
+    else
+      for id in "${sorted[@]}"; do print -r -- "$id"; done
+    fi
+    return 0
+  }
+
+  _ymlx_headless_info() {
+    local model="$1" json=0
+    [[ "$2" == "--json" ]] && json=1
+    if [[ -z "$model" ]]; then
+      print -u2 "usage: ymlx info <model-id> [--json]"
+      return 2
+    fi
+    local folder="$hub_dir/models--${model//\//--}"
+    local family spec control markers rf size_kb=0
+    family=$(_ymlx_model_family "$model" "$hub_dir")
+    spec=$(_ymlx_thinking_spec "$model" "$hub_dir")
+    control="${spec%%$'\t'*}"; spec="${spec#*$'\t'}"
+    markers="${spec%%$'\t'*}"; rf="${spec#*$'\t'}"
+    [[ -d "$folder" ]] && size_kb=$(du -sk "$folder" 2>/dev/null | awk '{print $1}')
+    local installed=false
+    [[ -d "$folder" ]] && installed=true
+    if (( json )); then
+      printf '{"model":"%s","installed":%s,"family":"%s","thinking_control":"%s","thinking_markers":"%s","reasoning_first":%s,"path":"%s","size_bytes":%s}\n' \
+        "$(_ymlx_json_escape "$model")" "$installed" "$family" "$control" "$markers" \
+        "$([[ "$rf" == 1 ]] && echo true || echo false)" \
+        "$(_ymlx_json_escape "$folder")" "$(( size_kb * 1024 ))"
+    else
+      print "Model:      $model"
+      print "Installed:  $installed"
+      print "Family:     $family"
+      print "Thinking:   control=$control markers=$markers reasoning-first=$([[ "$rf" == 1 ]] && echo yes || echo no)"
+      print "Path:       $folder"
+      (( size_kb > 0 )) && print "Size:       $(du -sh "$folder" 2>/dev/null | awk '{print $1}')"
+    fi
+    return 0
+  }
+
+  _ymlx_headless_endpoint() {
+    local json=0
+    [[ "$1" == "--json" ]] && json=1
+    local pid port cur
+    if [[ -n "$(_ymlx_running_model)" ]]; then
+      read -r pid port cur <<< "$(_ymlx_running_model)"
+    fi
+    if (( json )); then
+      if [[ -n "$cur" ]]; then
+        printf '{"model":"%s","port":%s,"base_url":"http://127.0.0.1:%s/v1"}\n' \
+          "$(_ymlx_json_escape "$cur")" "$port" "$port"
+        return 0
+      fi
+      print 'null'
+      return 1
+    fi
+    if [[ -n "$cur" ]]; then
+      print "http://127.0.0.1:$port/v1"
+      print "$cur"
+      return 0
+    fi
+    print "no model running on :11500"
+    return 1
+  }
+
+  # Download one or more models. Reuses the same loader the TUI download menu
+  # uses, so caching/verification behavior stays identical.
+  _ymlx_headless_download() {
+    if (( $# == 0 )); then
+      print -u2 "usage: ymlx download <model-id>..."
+      return 2
+    fi
+    local model rc=0
+    for model in "$@"; do
+      print -u2 "ymlx: downloading $model …"
+      if uvx --from mlx-vlm python3 -c "from mlx_vlm.utils import load; load('$model')"; then
+        print -u2 "ymlx: downloaded $model"
+      else
+        print -u2 "ymlx: download failed for $model"
+        rc=1
+      fi
+    done
+    return $rc
+  }
+
+  # Full curated catalog (all RAM tiers) — everything the Download menu holds
+  # back by tier, so shell users can see/pick any entry. Rows come from the
+  # shared parser, so this can't drift from the TUI menu. Each entry shows its
+  # title, its tagline, and the model id(s) to copy, with an installed tick.
+  _ymlx_headless_curated() {
+    local json=0
+    [[ "$1" == "--json" ]] && json=1
+    local first=1
+    if (( json )); then
+      print -n '['
+      local tier tname title ids tags desc
+      while IFS=$'\x1f' read -r tier tname title ids tags desc; do
+        (( first )) || print -n ','
+        first=0
+        # ids is ' & '-joined; JSON carries an array of them.
+        local -a dl=( ${(s: & :)ids} ) m
+        local idarr="["
+        local fi=1
+        for m in "${dl[@]}"; do
+          (( fi )) || idarr+=","
+          fi=0
+          idarr+="\"$(_ymlx_json_escape "$m")\""
+        done
+        idarr+="]"
+        printf '{"tier":%s,"title":"%s","models":%s,"tags":"%s","description":"%s"}' \
+          "${tier:-0}" "$(_ymlx_json_escape "$title")" "$idarr" \
+          "$(_ymlx_json_escape "$tags")" "$(_ymlx_json_escape "$desc")"
+      done < <(_ymlx_parse_catalog "$curated_file")
+      print ']'
+      return 0
+    fi
+
+    # ---- Collect rows + measure columns so the table lines up. The source has
+    # no title line: each entry's name IS its model id, with the tagline as the
+    # description. A paired entry lists several ids under one tagline.
+    local -a c_tier=() c_tname=() c_ids=() c_desc=()
+    local tier tname title ids tags desc
+    while IFS=$'\x1f' read -r tier tname title ids tags desc; do
+      c_tier+=( "${tier:-0}" ); c_tname+=( "$tname" ); c_ids+=( "$ids" )
+      c_desc+=( "${desc:-$tags}" )   # tagline, or legacy tags as a fallback
+    done < <(_ymlx_parse_catalog "$curated_file")
+
+    local i m w_id=0
+    for (( i=1; i<=${#c_ids[@]}; i++ )); do
+      for m in ${(s: & :)c_ids[$i]}; do
+        (( ${#m} > w_id )) && w_id=${#m}
+      done
+    done
+    local dim=$'\e[2m' pink=$'\e[1;38;5;212m' off=$'\e[0m'
+
+    # ---- Render: a titled header, one line per model id, tagline on the
+    # entry's first id, install tick at the end of the line.
+    printf '%s▌▌ Curated models%s\n' "$pink" "$off"
+    local n_inst=0 n_total=${#c_ids[@]} in_tier=-1
+    local any_inst mark first_id
+    for (( i=1; i<=${#c_ids[@]}; i++ )); do
+      if (( c_tier[i] != in_tier )); then
+        in_tier=${c_tier[$i]}
+        # The header text comes verbatim from the catalog source ("8 GB RAM
+        # Tier Models"), so curator repo wording changes show through as-is;
+        # only fall back to a synthesized label when the source had no header.
+        printf '\n%s%s%s\n' "$pink" \
+          "${c_tname[$i]:-${in_tier} GB RAM Tier Models}" "$off"
+      fi
+      any_inst=0
+      first_id=1
+      for m in ${(s: & :)c_ids[$i]}; do
+        mark=""
+        if [[ -d "$hub_dir/models--${m//\//--}" ]]; then
+          mark="  ${dim}✓ installed${off}"
+          any_inst=1
+        fi
+        # The tagline rides along on the entry's first line, aligned after the
+        # whole id column (so pairs stay readable).
+        if (( first_id )) && [[ -n "${c_desc[$i]}" ]]; then
+          printf '  %s   %s%s%s%s\n' "$(_ymlx_pad "$m" "$w_id")" "$dim" "${c_desc[$i]}" "$off" "$mark"
+          first_id=0
+        else
+          printf '  %s%s\n' "$m" "$mark"
+        fi
+      done
+      (( any_inst )) && (( n_inst++ ))
+    done
+    printf '\n%s%d of %d entries installed%s\n' "$dim" "$n_inst" "$n_total" "$off"
+    return 0
+  }
+
+  # Foreground launch + chat REPL. The server is session-tracked, so it is
+  # stopped when the REPL exits (unlike `run`, which detaches for agents).
+  _ymlx_headless_chat() {
+    local model="$1"
+    if [[ -z "$model" ]]; then
+      print -u2 "usage: ymlx chat <model-id>"
+      return 2
+    fi
+    local pid port cur
+    if [[ -n "$(_ymlx_running_model)" ]]; then
+      read -r pid port cur <<< "$(_ymlx_running_model)"
+      if [[ "$cur" != "$model" ]]; then
+        print -u2 "ymlx: stopping $cur (pid $pid) to switch to $model"
+        kill "$pid" 2>/dev/null
+        local i
+        for i in {1..40}; do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
+      fi
+    fi
+    if [[ -n "$(_ymlx_running_model)" ]]; then
+      read -r pid port cur <<< "$(_ymlx_running_model)"
+      _ymlx_chat_repl "$model" "$port"
+      return $?
+    fi
+    _ymlx_launch "$model" || return 1
+    _ymlx_chat_repl "$model" "$_YMLX_LAST_LAUNCH_PORT"
+    return $?
+  }
+
+  # ---- CLI (non-interactive) mode -------------------------------
+  # ``ymlx <sub> [args]`` runs and exits without the TUI. Servers started by
+  # `run` are DETACHED — they must survive this shell exiting (the pi
+  # model_select hook relies on it) — so we clear the EXIT trap, never add the
+  # pid to _YMLX_SESSION_PIDS, and disown it. `chat` and the TUI instead keep
+  # their server session-tracked so it dies with them.
   if (( $# > 0 )); then
     local _YMLX_HEADLESS=1
-    trap - EXIT INT TERM HUP
     local _sub="$1"; shift
+    # `chat` and TUI keep the EXIT trap; the management verbs don't need it.
+    [[ "$_sub" == chat ]] || trap - EXIT INT TERM HUP
     case "$_sub" in
-      run)        _ymlx_headless_run      "$@" ;;
+      run|serve)  _ymlx_headless_run      "$@" ;;
+      chat)       _ymlx_headless_chat     "$@" ;;
       stop)       _ymlx_headless_stop     "$@" ;;
       status)     _ymlx_headless_status   "$@" ;;
-      *) print -u2 "ymlx: unknown command '$_sub'"; print -u2 "usage: ymlx {run <model-id>|stop|status|version}"; return 2 ;;
+      list|ls)    _ymlx_headless_list     "$@" ;;
+      info)       _ymlx_headless_info     "$@" ;;
+      endpoint)   _ymlx_headless_endpoint "$@" ;;
+      download)   _ymlx_headless_download "$@" ;;
+      curated|curator) _ymlx_headless_curated "$@" ;;
+      version)    print "$(<"$_YMLX_SRC_DIR/VERSION" 2>/dev/null | tr -d '[:space:]')" ;;
+      help|-h|--help) _ymlx_usage ;;
+      *) print -u2 "ymlx: unknown command '$_sub'"; print -u2 ""; _ymlx_usage >&2; return 2 ;;
     esac
     return
   fi
 
   _ymlx_check_update "$@"
 
-  clear
+  # Farewell shown on the NORMAL screen after the TUI exits, so the shell gets
+  # its scrollback back and a one-line summary is left behind (rather than the
+  # leftover YMLX banner).
+  _ymlx_bye() {
+    _ymlx_tui_leave
+    print -n -- $'\e[2J\e[H'   # fresh screen: the sign-off sits at the very top
+    local msg="▌▌ YMLX says bye!"
+    (( ${_YMLX_BYE_STOPPED:-0} > 0 )) && msg+="  (stopped ${_YMLX_BYE_STOPPED} running model(s))"
+    gum style --foreground 212 --bold "$msg"
+  }
+
+  _ymlx_tui_enter
   echo
   _ymlx_main_header
   if ! _ymlx_hf_has_token; then
@@ -2014,8 +2268,9 @@ PY
   fi
   while true; do
     _ymlx_main_standard
-    (( _YMLX_MENU_QUIT )) && return
+    (( _YMLX_MENU_QUIT )) && break
   done
+  _ymlx_bye
 }
 
 _ymlx_cleanup() {
@@ -2025,6 +2280,9 @@ _ymlx_cleanup() {
     [[ -n "$pid" ]] && kill "$pid" 2>/dev/null
   done
   [[ -n "$_YMLX_STTY_SAVED" ]] && stty "$_YMLX_STTY_SAVED" 2>/dev/null
+  # Always give the terminal back: never leave the user on the alternate screen
+  # (also covers Ctrl-C / kill).
+  _ymlx_tui_leave
 }
 trap _ymlx_cleanup EXIT INT TERM HUP
 

@@ -4,6 +4,62 @@ All notable changes to ymlx are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Version numbers are kept in
 sync across `VERSION`, `package.json`, the Homebrew formula, and the README.
 
+## [Unreleased]
+
+## [0.135.0] - 2026-10-06
+
+### Added
+- **Command-line surface (`ymlx.zsh`).** ymlx now takes subcommands instead of
+  only opening the TUI: `run`, `chat`, `stop [<model>|--all]`, `status`,
+  `list`, `info`, `endpoint`, `download`, `curated`, `version` and `help`
+  (`serve`/`curator`/`ls` are hidden aliases). Data goes to stdout and logs to
+  stderr; `status`/`list`/`info`/`endpoint`/`curated` support `--json`. Exit
+  codes are stable (0 ok, 1 failure, 2 usage). Verbs that don't need the
+  Download menu skip the startup curated-list fetch, so they are fast and work
+  offline; `curated` is the exception (it wants the list, falling back to the
+  cache offline).
+- **`ymlx curated`** (`ymlx.zsh`). Prints the whole curated catalog — every RAM
+  tier, not just this machine's — with installed models marked. Titles, flags
+  and tags are shown but the model id is authoritative, so it doubles as a
+  copy-paste source for `ymlx download`.
+- **Tests (`tests/test_cli.zsh`).** Hermetic CLI contract tests (throwaway HOME
+  + stub tools); wired into `make test` alongside the helper tests.
+
+### Changed
+- **Clean, friendly exit (`ymlx.zsh`).** The TUI now runs on the alternate
+  screen buffer (`?1049`), so quitting restores the previous shell screen
+  instead of leaving the YMLX banner behind and wiping scrollback. It signs off
+  at the top of a fresh screen with `▌▌ YMLX says bye!`
+  (`… (stopped N running model(s))` appended when models were up), and the
+  restore also runs from the EXIT/INT/TERM traps so Ctrl-C can't strand you on
+  the alt screen.
+- **One catalog parser (`lib/ymlx-helpers.zsh`).** `_ymlx_parse_catalog` now
+  backs both the TUI Download menu and `ymlx curated`, so the two can't drift
+  on the block format / `#`-comment stripping / paired ids.
+- **New catalog format (`ymlx-curator`).** Entries are now blank-line-separated
+  2-line blocks — model id, then a tagline — with no flags, titles or tag
+  lines. There is no separate entry name: the model id **is** the name, and the
+  tagline maps to the description. `ymlx curated` prints one aligned line per
+  id (tagline and install tick in their own columns). Legacy 3-line
+  title-first and id/tags blocks still parse, so an older cached copy keeps
+  working.
+- **Parser field delimiter is ASCII US, not tab (`lib/ymlx-helpers.zsh`).**
+  zsh's `read` collapses repeated IFS *whitespace*, so a tab-delimited empty
+  field (an entry with no tags) silently shifted every later field and the
+  tagline showed up as tags. The internal records now use `\x1f` and carry the
+  tier header line verbatim, which `ymlx curated` prints as-is instead of
+  rebuilding "<n> GB RAM" from the tier number.
+- **`stop` gained targets** (`ymlx stop <model>` / `--all`) alongside the
+  original no-arg form, which still stops the model on `:11500`.
+
+### Fixed
+- **Tier headers no longer clobber the Download menu / `ymlx curated`
+  (`ymlx.zsh`).** Both call sites still read the old 5-field parser record, so
+  with the new 6-field record the tier header line landed in the "title" slot,
+  the model id in "tags", and the tagline in "description" — the menu showed
+  `16 GB RAM Tier Models  // ornith-ai/Ornith-1.5-9B-MLX-4bit`. They now consume
+  the header field (the menu ignores it; `curated` prints it verbatim).
+
 ## [0.134.0] - 2026-10-02
 
 ### Changed
@@ -14,8 +70,6 @@ sync across `VERSION`, `package.json`, the Homebrew formula, and the README.
 
 The ymlx self-update *notice* (`_ymlx_check_update`, interactive only) is
 unchanged — it only prints when a new ymlx release exists, it never installs.
-
-## [Unreleased]
 
 ## [0.133.0] - 2026-10-01
 

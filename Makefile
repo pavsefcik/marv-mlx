@@ -27,6 +27,7 @@ release: check bump commit tag info
 test:
 	python3 -m unittest discover -s tests
 	zsh tests/test_helpers.zsh
+	zsh tests/test_cli.zsh
 
 # Refuse to tag a dirty tree.
 check:

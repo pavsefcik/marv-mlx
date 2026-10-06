@@ -62,6 +62,173 @@ _ymlx_flag_set() {
   eval "${name}=( \"\${out[@]}\" )"
 }
 
+# ---------------------------------------------------------------------------
+# Terminal screen state.
+#
+# The interactive TUI runs on the alternate screen buffer (?1049) so quitting
+# restores whatever the shell showed before: no leftover YMLX banner, no
+# destroyed scrollback. _YMLX_TUI_ACTIVE tracks whether we own the alt buffer so
+# a single restore path (also used by the EXIT trap) stays idempotent.
+# ---------------------------------------------------------------------------
+typeset -g _YMLX_TUI_ACTIVE=0
+
+_ymlx_tui_enter() {
+  (( _YMLX_TUI_ACTIVE )) && return 0
+  _YMLX_TUI_ACTIVE=1
+  print -n -- $'\e[?1049h\e[H\e[2J'
+}
+
+_ymlx_tui_leave() {
+  (( _YMLX_TUI_ACTIVE )) || return 0
+  _YMLX_TUI_ACTIVE=0
+  print -n -- $'\e[0m\e[?25h\e[?1049l'
+}
+
+# Print a line on the NORMAL screen, leaving the alt buffer first so it stays
+# visible in scrollback after ymlx exits (rather than being swallowed with the
+# alt screen).
+_ymlx_print_normal() {
+  _ymlx_tui_leave
+  print -r -- "$@"
+}
+
+# CLI help. Lives here (not inside ymlx()) so the --help fast path can print it
+# before any of the TUI helpers are defined.
+_ymlx_usage() {
+  cat <<'USAGE'
+ymlx — local MLX model manager + OpenAI-compatible server on :11500
+
+Usage:
+  ymlx                        interactive TUI (browse / run / download)
+  ymlx run <model>            start a model on :11500 (detached) and wait
+  ymlx chat <model>           start a model and open the built-in chat REPL
+  ymlx stop [<model>|--all]   stop a running model (default: the one on :11500)
+  ymlx status [--json]        show what is running
+  ymlx list [--json]          list locally installed models
+  ymlx download <model>...    download model(s) from the HuggingFace Hub
+  ymlx curated [--json]       show the full curated model catalog (all tiers)
+  ymlx info <model> [--json]  show details for a model (size, family, thinking)
+  ymlx endpoint [--json]      print the base URL / model of the running server
+  ymlx version | -v           print the ymlx version
+  ymlx help | -h | --help     show this help
+
+Commands print data on stdout and human logs on stderr, so they compose; pass
+--json where offered for machine-readable output. Exit codes: 0 ok, 1 failure,
+2 usage error.
+USAGE
+}
+
+# Parse the curated catalog (ymlx-curator's ymlx-curator.md) into flat,
+# all-tiers model rows. Emits one US-delimited (\x1f) line per distinct entry:
+#
+#   tier<US>tier_name<US>title<US>ids<US>tags<US>description
+#
+# `tier` is the numeric tier used for matching (8/16/32) and `tier_name` is the
+# header line exactly as written in the source (e.g. "8 GB RAM Tier Models") —
+# consumers display that verbatim instead of rebuilding it from the number.
+#
+# The delimiter is ASCII US (unit separator), NOT a tab: zsh's `read` collapses
+# repeated IFS *whitespace*, so a tab-delimited empty field (e.g. no tags) would
+# silently shift every later field. US is not whitespace, so empty fields survive.
+# line containing "GB RAM". Entries may be '#'-commented; the marker is stripped
+# so the full catalog shows (the '#' only highlights the hand-picked picks).
+#
+# Current format: blank-line-separated 2-line blocks of
+#
+#   <model-id>
+#   <tagline>
+#
+# The model id is authoritative and doubles as the entry name; the tagline is a
+# short human description. Legacy shapes are still accepted so an older cached
+# copy keeps working:
+#   * 3-line title-first:  <title> / <id(s)> / <tags>
+#   * 2-line id/tags:      <id> / <tags>
+#   * leading flag emoji:  "<flag> <id>" (cosmetic, peeled)
+# Shared by the TUI download menu and `ymlx curated`.
+_ymlx_parse_catalog() {
+  local file="$1"
+  [[ -r "$file" ]] || return 0
+  local _YMLX_US=$'\x1f'
+  local line current_tier=0 current_tier_name=""
+  local -a entry=()
+  _ymlx_catalog_flush() {
+    ((${#entry[@]})) || return
+    local a="${entry[1]}" b="${entry[2]:-}" c="${entry[3]:-}"
+    entry=()
+    [[ -n "$a" ]] || return
+    # Legacy leading flag emoji: emoji carry no ASCII alphanumerics, so a first
+    # whitespace-delimited token without any is a flag — peel it off.
+    if [[ "$a" == *" "* ]]; then
+      local f="${a%% *}"
+      [[ "$f" != *[A-Za-z0-9]* ]] && a="${a#* }"
+    fi
+    local title="" ids="" tags="" desc=""
+    if [[ "$a" == */* ]]; then
+      # id-first block (the current format): '<id>' then a tagline. There is no
+      # separate title in the source, so the entry name IS the model id.
+      # A second line with spaces but no comma is the tagline (description);
+      # otherwise it is a legacy tags token list.
+      ids="$a"
+      if [[ -n "$b" && "$b" == *" "* && "$b" != *,* ]]; then
+        desc="$b"
+      else
+        tags="$b"; desc="$c"
+      fi
+      # ${(s:..:)x}[1] mis-subscripts when the split yields one word, so split
+      # into an array first. The id list is ' & '-joined.
+      local -a parts=( ${(s: & :)ids} )
+      title="${parts[1]}"
+    elif [[ -n "$b" ]]; then
+      # legacy title-first 3-line block
+      title="$a"; ids="$b"; tags="$c"
+    else
+      # bare id line
+      ids="$a"; title="$a"
+    fi
+    print -r -- "$current_tier${_YMLX_US}$current_tier_name${_YMLX_US}$title${_YMLX_US}$ids${_YMLX_US}$tags${_YMLX_US}$desc"
+  }
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ -z "$line" ]]; then
+      _ymlx_catalog_flush
+      continue
+    fi
+    if [[ "$line" == *"GB RAM"* ]]; then
+      _ymlx_catalog_flush
+      current_tier="${line//[^0-9]/}"
+      # Keep the header verbatim for display (trim surrounding whitespace).
+      current_tier_name="${line##[[:space:]]#}"
+      current_tier_name="${current_tier_name%%[[:space:]]#}"
+      continue
+    fi
+    if [[ "$line" == \#* ]]; then
+      line="${line#\#}"
+      line="${line#"${line%%[![:space:]]*}"}"
+    fi
+    entry+=( "$line" )
+  done < "$file"
+  _ymlx_catalog_flush
+}
+
+# Pad a string to a display width with trailing spaces (printf pads by
+# character count, which is enough for the ASCII titles/ids in the catalog
+# table after flag emojis are stripped).
+_ymlx_pad() {
+  printf '%-*s' "$2" "$1"
+}
+
+# Escape a string for embedding in a JSON double-quoted value (the CLI's
+# --json output). Escapes backslash, quote, and control chars; yields the
+# string WITHOUT surrounding quotes.
+_ymlx_json_escape() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\r'/\\r}"
+  s="${s//$'\t'/\\t}"
+  print -rn -- "$s"
+}
+
 # Is TCP port $1 free (nothing listening)?
 _ymlx_port_free() {
   ! lsof -iTCP:"$1" -sTCP:LISTEN -t >/dev/null 2>&1
