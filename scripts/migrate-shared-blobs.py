@@ -3,7 +3,7 @@
 
 huggingface_hub >= 1.33 caches Xet-served files (large .safetensors, tokenizers)
 in a cache-wide store at <cache>/blobs/<first-2-hex>/<xet-hash> and leaves only a
-symlink in each model's own blobs/ dir. ymlx keeps every model self-contained, so
+symlink in each model's own blobs/ dir. marv-mlx keeps every model self-contained, so
 this tool:
 
   1. finds each model symlink that points into the shared store,

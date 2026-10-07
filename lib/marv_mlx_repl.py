@@ -1,10 +1,10 @@
-"""ymlx chat REPL.
+"""marv-mlx chat REPL.
 
 A small streaming chat client for an mlx_vlm.server OpenAI-compatible endpoint.
 It renders reasoning ("thinking") traces in grey, the answer in the default
 colour, supports Esc-to-stop, Enter/Tab, chat logging and resume-from-log.
 
-Thinking is model-family specific. The caller (ymlx.zsh) classifies the model
+Thinking is model-family specific. The caller (marv-mlx.zsh) classifies the model
 and passes:
 
     --control   enable_thinking | variant | none
@@ -223,7 +223,7 @@ def build_body(model, messages, control, markers, effective, temp="", max_tokens
 
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(prog="ymlx-repl", description=__doc__)
+    parser = argparse.ArgumentParser(prog="marv-mlx-repl", description=__doc__)
     parser.add_argument("--url", required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument("--system-prompt", default="")

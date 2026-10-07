@@ -1,12 +1,12 @@
 #!/usr/bin/env zsh
-# Unit tests for the thinking classifier/spec in lib/ymlx-helpers.zsh.
+# Unit tests for the thinking classifier/spec in lib/marv-mlx-helpers.zsh.
 # Hermetic: builds a throwaway HF hub fixture.
 # Run:  zsh tests/test_helpers.zsh
 
 emulate -L zsh
 setopt no_unset
 
-source "${0:A:h}/../lib/ymlx-helpers.zsh"
+source "${0:A:h}/../lib/marv-mlx-helpers.zsh"
 
 typeset -g fail=0
 
@@ -37,59 +37,59 @@ mk "acme/LFM2.5-8B" lfm2_moe
 mk "acme/SomeModel" ""                       # name fallback
 mk "acme/Mystery-Qwen-X" ""                  # name fallback
 
-check qwen "$(_ymlx_model_family acme/Qwen3.5-9B "$hub")" "qwen3_5 -> qwen"
-check qwen "$(_ymlx_model_family acme/Qwen3.6-MoE "$hub")" "qwen3_5_moe -> qwen"
-check gemma "$(_ymlx_model_family acme/gemma-4-12B "$hub")" "gemma4_unified -> gemma"
-check ministral-reasoning "$(_ymlx_model_family acme/Ministral-3-8B-Reasoning-2512-4bit "$hub")" "mistral3 reasoning"
-check ministral-instruct "$(_ymlx_model_family acme/Ministral-3-8B-Instruct-2512-4bit "$hub")" "mistral3 instruct"
-check lfm "$(_ymlx_model_family acme/LFM2.5-8B "$hub")" "lfm2_moe -> lfm"
-check generic "$(_ymlx_model_family acme/SomeModel "$hub")" "unknown -> generic"
-check qwen "$(_ymlx_model_family acme/Mystery-Qwen-X "$hub")" "name fallback qwen"
+check qwen "$(_marv_mlx_model_family acme/Qwen3.5-9B "$hub")" "qwen3_5 -> qwen"
+check qwen "$(_marv_mlx_model_family acme/Qwen3.6-MoE "$hub")" "qwen3_5_moe -> qwen"
+check gemma "$(_marv_mlx_model_family acme/gemma-4-12B "$hub")" "gemma4_unified -> gemma"
+check ministral-reasoning "$(_marv_mlx_model_family acme/Ministral-3-8B-Reasoning-2512-4bit "$hub")" "mistral3 reasoning"
+check ministral-instruct "$(_marv_mlx_model_family acme/Ministral-3-8B-Instruct-2512-4bit "$hub")" "mistral3 instruct"
+check lfm "$(_marv_mlx_model_family acme/LFM2.5-8B "$hub")" "lfm2_moe -> lfm"
+check generic "$(_marv_mlx_model_family acme/SomeModel "$hub")" "unknown -> generic"
+check qwen "$(_marv_mlx_model_family acme/Mystery-Qwen-X "$hub")" "name fallback qwen"
 
-check $'enable_thinking\tthink\t0' "$(_ymlx_thinking_spec acme/Qwen3.5-9B "$hub")" "qwen spec"
-check $'enable_thinking\tchannel\t0' "$(_ymlx_thinking_spec acme/gemma-4-12B "$hub")" "gemma spec"
-check $'variant\tbracket\t1' "$(_ymlx_thinking_spec acme/Ministral-3-8B-Reasoning-2512-4bit "$hub")" "ministral-r spec"
-check $'variant\tnone\t0' "$(_ymlx_thinking_spec acme/Ministral-3-8B-Instruct-2512-4bit "$hub")" "ministral-i spec"
-check $'none\tthink\t0' "$(_ymlx_thinking_spec acme/LFM2.5-8B "$hub")" "lfm spec"
+check $'enable_thinking\tthink\t0' "$(_marv_mlx_thinking_spec acme/Qwen3.5-9B "$hub")" "qwen spec"
+check $'enable_thinking\tchannel\t0' "$(_marv_mlx_thinking_spec acme/gemma-4-12B "$hub")" "gemma spec"
+check $'variant\tbracket\t1' "$(_marv_mlx_thinking_spec acme/Ministral-3-8B-Reasoning-2512-4bit "$hub")" "ministral-r spec"
+check $'variant\tnone\t0' "$(_marv_mlx_thinking_spec acme/Ministral-3-8B-Instruct-2512-4bit "$hub")" "ministral-i spec"
+check $'none\tthink\t0' "$(_marv_mlx_thinking_spec acme/LFM2.5-8B "$hub")" "lfm spec"
 
 # Launch flags: resolved --enable-thinking + Ministral markers.
-YMLX_QUICK_THINKING=on
+MARV_MLX_QUICK_THINKING=on
 local -a flags
 flags=( --max-tokens 2048 )
-_ymlx_apply_launch_thinking flags acme/Ministral-3-8B-Reasoning-2512-4bit "$hub"
+_marv_mlx_apply_launch_thinking flags acme/Ministral-3-8B-Reasoning-2512-4bit "$hub"
 check "1" "$(( ${flags[(I)--enable-thinking]} > 0 ))" "ministral on: --enable-thinking added"
 check "1" "$(( ${flags[(I)--thinking-start-token]} > 0 ))" "ministral on: start token added"
 check "1" "$(( ${flags[(I)--thinking-end-token]} > 0 ))" "ministral on: end token added"
 
 flags=( --max-tokens 2048 --enable-thinking )
-YMLX_QUICK_THINKING=default
-_ymlx_apply_launch_thinking flags acme/Qwen3.5-9B "$hub"
+MARV_MLX_QUICK_THINKING=default
+_marv_mlx_apply_launch_thinking flags acme/Qwen3.5-9B "$hub"
 check "0" "$(( ${flags[(I)--enable-thinking]} > 0 ))" "qwen default: stale flag dropped"
 check "0" "$(( ${flags[(I)--thinking-start-token]} > 0 ))" "qwen: no bracket markers"
 
 # --- CLI plumbing helpers -----------------------------------------------------
 # `filters` / `replace` stand in for a hub dir listing: they let us exercise
-# _ymlx_json_escape without touching the filesystem.
-check 'org/Model' "$(_ymlx_json_escape 'org/Model')" "json: plain string"
-check 'a\"b'   "$(_ymlx_json_escape 'a"b')"     "json: quote escaped"
-check 'a\\b'   "$(_ymlx_json_escape 'a\b')"     "json: backslash escaped"
-check 'a\nb'   "$(_ymlx_json_escape $'a\nb')"   "json: newline escaped"
-check 'a\tb'   "$(_ymlx_json_escape $'a\tb')"   "json: tab escaped"
+# _marv_mlx_json_escape without touching the filesystem.
+check 'org/Model' "$(_marv_mlx_json_escape 'org/Model')" "json: plain string"
+check 'a\"b'   "$(_marv_mlx_json_escape 'a"b')"     "json: quote escaped"
+check 'a\\b'   "$(_marv_mlx_json_escape 'a\b')"     "json: backslash escaped"
+check 'a\nb'   "$(_marv_mlx_json_escape $'a\nb')"   "json: newline escaped"
+check 'a\tb'   "$(_marv_mlx_json_escape $'a\tb')"   "json: tab escaped"
 
 # Alternate-screen state machine: enter/leave are idempotent and leave() must
 # actually emit the restore sequence when we own the terminal.
-_YMLX_TUI_ACTIVE=0
-_ymlx_tui_enter >/dev/null
-check 1 "$_YMLX_TUI_ACTIVE" "tui: enter sets active"
-_ymlx_tui_enter >/dev/null   # second call must not re-emit
-_ymlx_tui_leave >/dev/null
-check 0 "$_YMLX_TUI_ACTIVE" "tui: leave clears active"
-out=$(_ymlx_tui_leave; print -n X)
+_MARV_MLX_TUI_ACTIVE=0
+_marv_mlx_tui_enter >/dev/null
+check 1 "$_MARV_MLX_TUI_ACTIVE" "tui: enter sets active"
+_marv_mlx_tui_enter >/dev/null   # second call must not re-emit
+_marv_mlx_tui_leave >/dev/null
+check 0 "$_MARV_MLX_TUI_ACTIVE" "tui: leave clears active"
+out=$(_marv_mlx_tui_leave; print -n X)
 check X "$out" "tui: leave is idempotent"
-out=$(_YMLX_TUI_ACTIVE=1 _ymlx_tui_leave; print -n X)
+out=$(_MARV_MLX_TUI_ACTIVE=1 _marv_mlx_tui_leave; print -n X)
 check X "${out##*$'\e[?1049l'}" "tui: leave emits restore when active"
 
-_ymlx_usage | grep -q 'ymlx download' \
+_marv_mlx_usage | grep -q 'marv-mlx download' \
   && print "ok: usage lists download" \
   || { print -u2 "FAIL: usage missing download"; fail=1 }
 
@@ -115,7 +115,7 @@ CAT
 # Field order is tier<US>tier_name<US>title<US>ids<US>tags<US>description. Read
 # with US as IFS: a tab IFS would collapse the empty tags field and shift the
 # tagline.
-catalog_rows() { _ymlx_parse_catalog "$hub/cat.md"; }
+catalog_rows() { _marv_mlx_parse_catalog "$hub/cat.md"; }
 row1=$(catalog_rows | sed -n 1p)
 IFS=$'\x1f' read -r t tname title ids tags desc <<< "$row1"
 check 8 "$t" "catalog: tier"
@@ -147,7 +147,7 @@ cat > "$hub/cat2.md" <<'CAT'
 acme/Old-4B
 t3
 CAT
-old=$( _ymlx_parse_catalog "$hub/cat2.md" )
+old=$( _marv_mlx_parse_catalog "$hub/cat2.md" )
 IFS=$'\x1f' read -r t tname title ids tags desc <<< "$old"
 check 'acme/Old-4B' "$ids" "catalog: legacy id-only block"
 check 'acme/Old-4B' "$title" "catalog: legacy id-only name"
@@ -155,7 +155,7 @@ check 't3' "$tags" "catalog: legacy id-only tags"
 
 # Empty catalog is not an error.
 : > "$hub/empty.md"
-check '' "$(_ymlx_parse_catalog "$hub/empty.md")" "catalog: empty file -> no rows"
+check '' "$(_marv_mlx_parse_catalog "$hub/empty.md")" "catalog: empty file -> no rows"
 
 # The US delimiter round-trips a field containing spaces and slashes.
 check 6 "$(print -r -- "$row1" | awk -F$'\x1f' '{print NF}')" "catalog: exactly 6 fields"

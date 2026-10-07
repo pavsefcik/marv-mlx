@@ -1,4 +1,4 @@
-"""Unit tests for lib/ymlx_repl.py (the chat stream filter).
+"""Unit tests for lib/marv_mlx_repl.py (the chat stream filter).
 
 Run:  python3 -m unittest discover -s tests -v
 """
@@ -9,7 +9,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 
-import ymlx_repl as r  # noqa: E402
+import marv_mlx_repl as r  # noqa: E402
 
 
 def render(text):

@@ -1,4 +1,4 @@
-# ymlx release tooling.
+# marv-mlx release tooling.
 #
 #   make release              -> bump VERSION, commit, tag vX.Y.Z (local)
 #   make formula              -> rewrite the Homebrew formula sha256/url from the
@@ -8,15 +8,15 @@
 #   make release VERSION=0.1.0
 #   git push origin main v0.1.0
 #   make formula
-#   (cd ../homebrew-ymlx && git add Formula && git commit -m "ymlx 0.1.0" && git push)
+#   (cd ../homebrew-marv-mlx && git add Formula && git commit -m "marv-mlx 0.1.0" && git push)
 SHELL := /bin/bash
 
 VERSION ?= $(shell cat VERSION)
 TAG     := v$(VERSION)
-REPO    := pavsefcik/ymlx
-# Sibling checkout of the tap repo (create it with: git init ../homebrew-ymlx)
-BREW    := ../homebrew-ymlx
-FORMULA := $(BREW)/Formula/ymlx.rb
+REPO    := pavsefcik/marv-mlx
+# Sibling checkout of the tap repo (create it with: git init ../homebrew-marv-mlx)
+BREW    := ../homebrew-marv-mlx
+FORMULA := $(BREW)/Formula/marv-mlx.rb
 
 .PHONY: release check bump commit tag info formula test
 
@@ -45,7 +45,7 @@ commit:
 	git commit -m "Release $(VERSION)"
 
 tag:
-	git tag -a "$(TAG)" -m "ymlx $(VERSION)"
+	git tag -a "$(TAG)" -m "marv-mlx $(VERSION)"
 	@echo "Tagged $(TAG). Push with:"
 	@echo "  git push origin main $(TAG)"
 
@@ -59,8 +59,8 @@ formula:
 	@test -f "$(FORMULA)" || { echo "$(FORMULA) not found"; exit 1; }
 	@test -n "$(TAG)"
 	@curl -fsSL "https://github.com/$(REPO)/archive/refs/tags/$(TAG).tar.gz" \
-		-o "/tmp/ymlx-$(TAG).tar.gz"
-	@sha="$$(shasum -a 256 "/tmp/ymlx-$(TAG).tar.gz" | awk '{print $$1}')"; \
+		-o "/tmp/marv-mlx-$(TAG).tar.gz"
+	@sha="$$(shasum -a 256 "/tmp/marv-mlx-$(TAG).tar.gz" | awk '{print $$1}')"; \
 	sed -e "s|archive/refs/tags/v[^/]*\.tar\.gz|archive/refs/tags/$(TAG).tar.gz|" \
 	    -e "s|^  sha256 .*|  sha256 \"$$sha\"|" "$(FORMULA)" > "$(FORMULA).tmp" \
 	&& mv "$(FORMULA).tmp" "$(FORMULA)"; \

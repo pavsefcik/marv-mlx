@@ -1,9 +1,9 @@
-# ymlx helpers — self-contained, arg-driven utilities extracted from the main
-# ymlx() body. None of these read ymlx()'s locals. Sourced once by ymlx.zsh
-# before ymlx() is defined.
+# marv-mlx helpers — self-contained, arg-driven utilities extracted from the main
+# marv-mlx() body. None of these read marv-mlx()'s locals. Sourced once by marv-mlx.zsh
+# before marv-mlx() is defined.
 
 # Pick a beginner-friendly editor: micro > nano > $EDITOR/$VISUAL > vi.
-_ymlx_pick_editor() {
+_marv_mlx_pick_editor() {
   if command -v micro >/dev/null 2>&1; then echo micro
   elif command -v nano >/dev/null 2>&1; then echo nano
   elif [[ -n "$VISUAL" ]] && command -v "${VISUAL%% *}" >/dev/null 2>&1; then echo "$VISUAL"
@@ -13,7 +13,7 @@ _ymlx_pick_editor() {
 }
 
 # Replace --flag value in a named array, or append if absent.
-_ymlx_replace_or_append() {
+_marv_mlx_replace_or_append() {
   local name="$1" flag="$2" value="$3"
   local -a arr
   eval "arr=( \"\${${name}[@]}\" )"
@@ -30,9 +30,9 @@ _ymlx_replace_or_append() {
 }
 
 # Return 0 if semver-ish $1 > $2 (numeric dot-separated fields; non-numeric
-# fields count as 0 — enough to compare ymlx releases). Handles "v" prefixes
+# fields count as 0 — enough to compare marv-mlx releases). Handles "v" prefixes
 # and unequal field counts (0.1 == 0.1.0).
-_ymlx_version_gt() {
+_marv_mlx_version_gt() {
   local v1="${1#v}" v2="${2#v}"
   local -a a=("${(ps:.:)v1}") b=("${(ps:.:)v2}")
   local i n x y
@@ -49,7 +49,7 @@ _ymlx_version_gt() {
 
 # Ensure (add=1) or remove (add=0) a valueless flag in a named array (e.g.
 # --enable-thinking). Removes duplicates, then appends if adding.
-_ymlx_flag_set() {
+_marv_mlx_flag_set() {
   local name="$1" flag="$2" add="$3"
   local -a arr out
   eval "arr=( \"\${${name}[@]}\" )"
@@ -66,51 +66,87 @@ _ymlx_flag_set() {
 # Terminal screen state.
 #
 # The interactive TUI runs on the alternate screen buffer (?1049) so quitting
-# restores whatever the shell showed before: no leftover YMLX banner, no
-# destroyed scrollback. _YMLX_TUI_ACTIVE tracks whether we own the alt buffer so
+# restores whatever the shell showed before: no leftover marv-mlx banner, no
+# destroyed scrollback. _MARV_MLX_TUI_ACTIVE tracks whether we own the alt buffer so
 # a single restore path (also used by the EXIT trap) stays idempotent.
 # ---------------------------------------------------------------------------
-typeset -g _YMLX_TUI_ACTIVE=0
+typeset -g _MARV_MLX_TUI_ACTIVE=0
 
-_ymlx_tui_enter() {
-  (( _YMLX_TUI_ACTIVE )) && return 0
-  _YMLX_TUI_ACTIVE=1
+_marv_mlx_tui_enter() {
+  (( _MARV_MLX_TUI_ACTIVE )) && return 0
+  _MARV_MLX_TUI_ACTIVE=1
   print -n -- $'\e[?1049h\e[H\e[2J'
 }
 
-_ymlx_tui_leave() {
-  (( _YMLX_TUI_ACTIVE )) || return 0
-  _YMLX_TUI_ACTIVE=0
+_marv_mlx_tui_leave() {
+  (( _MARV_MLX_TUI_ACTIVE )) || return 0
+  _MARV_MLX_TUI_ACTIVE=0
   print -n -- $'\e[0m\e[?25h\e[?1049l'
 }
 
+# One-time, idempotent migration from the old `ymlx` layout. Runs on every
+# launch but only acts when the old state exists and the new one doesn't yet.
+# Copy-then-switch: the old tree is left intact for one release so a downgrade
+# still works.
+_marv_mlx_migrate_legacy_state() {
+  local old="$HOME/.cache/ymlx"
+  local new="$HOME/.cache/marv/mlx"
+  # 1. State dir: move to the shared marv cache root (only if target absent).
+  if [[ -d "$old" && ! -e "$new" ]]; then
+    mkdir -p "${new:h}"
+    cp -R "$old" "$new" 2>/dev/null && \
+      print -u2 "marv-mlx: migrated state $old -> $new"
+  fi
+  # 2. Managed block markers inside config.zsh.
+  local cf="$new/config.zsh"
+  if [[ -f "$cf" ]] && grep -q '^# >>> ymlx-managed' "$cf" 2>/dev/null; then
+    sed -i '' 's/^# >>> ymlx-managed/# >>> marv-mlx-managed/; s/^# <<< end ymlx-managed/# <<< end marv-mlx-managed/' "$cf"
+  fi
+  # 3. Legacy variable names inside config.zsh (managed quick settings and the
+  # hand-edited CHAT_FLAGS/SERVER_FLAGS below the block).
+  if [[ -f "$cf" ]] && grep -q '^YMLX_' "$cf" 2>/dev/null; then
+    sed -i '' 's/^\(YMLX_\)/MARV_MLX_/' "$cf"
+  fi
+  # 4. ~/.zshrc launcher line (old path -> new path).
+  local zshrc="$HOME/.zshrc"
+  if [[ -f "$zshrc" ]] && grep -q 'ymlx-launcher.zsh' "$zshrc" 2>/dev/null; then
+    sed -i '' 's|ymlx-launcher.zsh|marv-mlx-launcher.zsh|g' "$zshrc"
+    print -u2 "marv-mlx: updated ~/.zshrc launcher line"
+  fi
+  # 5. Stale pi wrapper for the old command name.
+  [[ -f "$HOME/.pi/agent/bin/ymlx" ]] && rm -f "$HOME/.pi/agent/bin/ymlx"
+  # 6. Stale pi extension copy.
+  [[ -f "$HOME/.pi/agent/extensions/ymlx-sync.ts" ]] && rm -f "$HOME/.pi/agent/extensions/ymlx-sync.ts"
+  return 0
+}
+
 # Print a line on the NORMAL screen, leaving the alt buffer first so it stays
-# visible in scrollback after ymlx exits (rather than being swallowed with the
+# visible in scrollback after marv-mlx exits (rather than being swallowed with the
 # alt screen).
-_ymlx_print_normal() {
-  _ymlx_tui_leave
+_marv_mlx_print_normal() {
+  _marv_mlx_tui_leave
   print -r -- "$@"
 }
 
-# CLI help. Lives here (not inside ymlx()) so the --help fast path can print it
+# CLI help. Lives here (not inside marv-mlx()) so the --help fast path can print it
 # before any of the TUI helpers are defined.
-_ymlx_usage() {
+_marv_mlx_usage() {
   cat <<'USAGE'
-ymlx — local MLX model manager + OpenAI-compatible server on :11500
+marv-mlx — local MLX model manager + OpenAI-compatible server on :11500
 
 Usage:
-  ymlx                        interactive TUI (browse / run / download)
-  ymlx run <model>            start a model on :11500 (detached) and wait
-  ymlx chat <model>           start a model and open the built-in chat REPL
-  ymlx stop [<model>|--all]   stop a running model (default: the one on :11500)
-  ymlx status [--json]        show what is running
-  ymlx list [--json]          list locally installed models
-  ymlx download <model>...    download model(s) from the HuggingFace Hub
-  ymlx curated [--json]       show the full curated model catalog (all tiers)
-  ymlx info <model> [--json]  show details for a model (size, family, thinking)
-  ymlx endpoint [--json]      print the base URL / model of the running server
-  ymlx version | -v           print the ymlx version
-  ymlx help | -h | --help     show this help
+  marv-mlx                        interactive TUI (browse / run / download)
+  marv-mlx run <model>            start a model on :11500 (detached) and wait
+  marv-mlx chat <model>           start a model and open the built-in chat REPL
+  marv-mlx stop [<model>|--all]   stop a running model (default: the one on :11500)
+  marv-mlx status [--json]        show what is running
+  marv-mlx list [--json]          list locally installed models
+  marv-mlx download <model>...    download model(s) from the HuggingFace Hub
+  marv-mlx curated [--json]       show the full curated model catalog (all tiers)
+  marv-mlx info <model> [--json]  show details for a model (size, family, thinking)
+  marv-mlx endpoint [--json]      print the base URL / model of the running server
+  marv-mlx version | -v           print the marv-mlx version
+  marv-mlx help | -h | --help     show this help
 
 Commands print data on stdout and human logs on stderr, so they compose; pass
 --json where offered for machine-readable output. Exit codes: 0 ok, 1 failure,
@@ -118,7 +154,7 @@ Commands print data on stdout and human logs on stderr, so they compose; pass
 USAGE
 }
 
-# Parse the curated catalog (ymlx-curator's ymlx-curator.md) into flat,
+# Parse the curated catalog (marv-curator's marv-curator.md) into flat,
 # all-tiers model rows. Emits one US-delimited (\x1f) line per distinct entry:
 #
 #   tier<US>tier_name<US>title<US>ids<US>tags<US>description
@@ -144,14 +180,14 @@ USAGE
 #   * 3-line title-first:  <title> / <id(s)> / <tags>
 #   * 2-line id/tags:      <id> / <tags>
 #   * leading flag emoji:  "<flag> <id>" (cosmetic, peeled)
-# Shared by the TUI download menu and `ymlx curated`.
-_ymlx_parse_catalog() {
+# Shared by the TUI download menu and `marv-mlx curated`.
+_marv_mlx_parse_catalog() {
   local file="$1"
   [[ -r "$file" ]] || return 0
-  local _YMLX_US=$'\x1f'
+  local _MARV_MLX_US=$'\x1f'
   local line current_tier=0 current_tier_name=""
   local -a entry=()
-  _ymlx_catalog_flush() {
+  _marv_mlx_catalog_flush() {
     ((${#entry[@]})) || return
     local a="${entry[1]}" b="${entry[2]:-}" c="${entry[3]:-}"
     entry=()
@@ -185,15 +221,15 @@ _ymlx_parse_catalog() {
       # bare id line
       ids="$a"; title="$a"
     fi
-    print -r -- "$current_tier${_YMLX_US}$current_tier_name${_YMLX_US}$title${_YMLX_US}$ids${_YMLX_US}$tags${_YMLX_US}$desc"
+    print -r -- "$current_tier${_MARV_MLX_US}$current_tier_name${_MARV_MLX_US}$title${_MARV_MLX_US}$ids${_MARV_MLX_US}$tags${_MARV_MLX_US}$desc"
   }
   while IFS= read -r line || [[ -n "$line" ]]; do
     if [[ -z "$line" ]]; then
-      _ymlx_catalog_flush
+      _marv_mlx_catalog_flush
       continue
     fi
     if [[ "$line" == *"GB RAM"* ]]; then
-      _ymlx_catalog_flush
+      _marv_mlx_catalog_flush
       current_tier="${line//[^0-9]/}"
       # Keep the header verbatim for display (trim surrounding whitespace).
       current_tier_name="${line##[[:space:]]#}"
@@ -206,20 +242,20 @@ _ymlx_parse_catalog() {
     fi
     entry+=( "$line" )
   done < "$file"
-  _ymlx_catalog_flush
+  _marv_mlx_catalog_flush
 }
 
 # Pad a string to a display width with trailing spaces (printf pads by
 # character count, which is enough for the ASCII titles/ids in the catalog
 # table after flag emojis are stripped).
-_ymlx_pad() {
+_marv_mlx_pad() {
   printf '%-*s' "$2" "$1"
 }
 
 # Escape a string for embedding in a JSON double-quoted value (the CLI's
 # --json output). Escapes backslash, quote, and control chars; yields the
 # string WITHOUT surrounding quotes.
-_ymlx_json_escape() {
+_marv_mlx_json_escape() {
   local s="$1"
   s="${s//\\/\\\\}"
   s="${s//\"/\\\"}"
@@ -230,16 +266,16 @@ _ymlx_json_escape() {
 }
 
 # Is TCP port $1 free (nothing listening)?
-_ymlx_port_free() {
+_marv_mlx_port_free() {
   ! lsof -iTCP:"$1" -sTCP:LISTEN -t >/dev/null 2>&1
 }
 
-# ymlx prefers :11500 so agentic CLIs always find the model, and falls back to
+# marv-mlx prefers :11500 so agentic CLIs always find the model, and falls back to
 # the next free port so a second model can run in parallel.
-_ymlx_find_port() {
+_marv_mlx_find_port() {
   local p
   for p in {11500..11509}; do
-    if _ymlx_port_free "$p"; then
+    if _marv_mlx_port_free "$p"; then
       echo "$p"
       return 0
     fi
@@ -249,25 +285,25 @@ _ymlx_find_port() {
 }
 
 # Auto-advance after a status message. Replaces the old "press enter to
-# continue" prompts so ymlx moves on by itself instead of asking to hit Enter;
+# continue" prompts so marv-mlx moves on by itself instead of asking to hit Enter;
 # the short pause still lets a result line be read before the next screen.
-_ymlx_pause() {
+_marv_mlx_pause() {
   sleep 0.7
 }
 
 # Friendly display name: drop the org prefix (e.g. `mlx-community/`).
-_ymlx_friendly_name() {
+_marv_mlx_friendly_name() {
   print -r -- "${1##*/}"
 }
 
-_ymlx_display_name() {
-  _ymlx_friendly_name "$1"
+_marv_mlx_display_name() {
+  _marv_mlx_friendly_name "$1"
 }
 
 # Ministral ships as an Instruct+Reasoning pair (two separate model ids).
 # If $1 is one half of a pair, echo the sibling full id and return 0;
 # otherwise return 1.
-_ymlx_ministral_sibling() {
+_marv_mlx_ministral_sibling() {
   local m="$1" base="${1##*/}" sib
   if [[ "$base" == *-Instruct-* ]]; then
     sib="${base/-Instruct-/-Reasoning-}"
@@ -281,14 +317,14 @@ _ymlx_ministral_sibling() {
 
 # Base display name for a Ministral half, e.g.
 #   mlx-community/Ministral-3-3B-Instruct-2512-4bit -> Ministral-3-3B-4bit
-_ymlx_ministral_base() {
+_marv_mlx_ministral_base() {
   print -r -- "$(print -r -- "${1##*/}" | sed -E 's/-([Ii]nstruct|[Rr]easoning)-[^-]+-/-/')"
 }
 
 # Classify a model into a thinking family. Reads model_type from the cached
 # config.json ($2 = HF hub dir), falling back to the id.
 #   qwen | gemma | ministral-reasoning | ministral-instruct | lfm | generic
-_ymlx_model_family() {
+_marv_mlx_model_family() {
   local model="$1" hub_dir="$2" base="${1##*/}" mt="" snap
   if [[ -n "$hub_dir" ]]; then
     snap=$(ls -d "$hub_dir/models--${model//\//--}"/snapshots/*(N/) 2>/dev/null | head -n1)
@@ -317,8 +353,8 @@ _ymlx_model_family() {
 #   control: enable_thinking (template bool) | variant (model id decides) | none
 #   markers: think (<think>) | channel (<|channel>thought) | bracket ([THINK]) | none
 #   reasoning-first: 1 when the trace starts immediately (Ministral Reasoning)
-_ymlx_thinking_spec() {
-  case "$(_ymlx_model_family "$1" "$2")" in
+_marv_mlx_thinking_spec() {
+  case "$(_marv_mlx_model_family "$1" "$2")" in
     qwen)                 print -r -- $'enable_thinking\tthink\t0' ;;
     gemma)                print -r -- $'enable_thinking\tchannel\t0' ;;
     ministral-reasoning)  print -r -- $'variant\tbracket\t1' ;;
@@ -335,28 +371,28 @@ _ymlx_thinking_spec() {
 #     still sends the value per request);
 #   * add Ministral's [THINK]/[/THINK] markers so the server splits its trace
 #     into reasoning_content even outside the REPL.
-_ymlx_apply_launch_thinking() {
+_marv_mlx_apply_launch_thinking() {
   local name="$1" model="$2" hub_dir="$3"
   local spec markers
-  spec=$(_ymlx_thinking_spec "$model" "$hub_dir")
+  spec=$(_marv_mlx_thinking_spec "$model" "$hub_dir")
   spec="${spec#*$'\t'}"
   markers="${spec%%$'\t'*}"
-  _ymlx_flag_set "$name" --enable-thinking 0
-  [[ "${YMLX_QUICK_THINKING:-default}" == "on" ]] \
-    && _ymlx_flag_set "$name" --enable-thinking 1
+  _marv_mlx_flag_set "$name" --enable-thinking 0
+  [[ "${MARV_MLX_QUICK_THINKING:-default}" == "on" ]] \
+    && _marv_mlx_flag_set "$name" --enable-thinking 1
   if [[ "$markers" == "bracket" ]]; then
-    _ymlx_replace_or_append "$name" --thinking-start-token "[THINK]"
-    _ymlx_replace_or_append "$name" --thinking-end-token "[/THINK]"
+    _marv_mlx_replace_or_append "$name" --thinking-start-token "[THINK]"
+    _marv_mlx_replace_or_append "$name" --thinking-end-token "[/THINK]"
   fi
 }
 
-# _ymlx_purge_orphan_blobs <hub_dir>
+# _marv_mlx_purge_orphan_blobs <hub_dir>
 # After a model folder is rm -rf'd, its large weight blobs may still sit in the
 # shared store hub/blobs/{shard}/. This sweeps that store and removes any blob
 # no cached model folder still references via a symlink (deduplicated across
 # the whole hub). Also removes the blob's .refs and .lock sidecars.
 # Prints a summary of what was freed; non-fatal if the store isn't present.
-_ymlx_purge_orphan_blobs() {
+_marv_mlx_purge_orphan_blobs() {
   local hub_dir="$1"
   # Canonicalize early so later realpath output (/private/tmp on macOS) matches
   # the hub_dir-derived blob paths below.

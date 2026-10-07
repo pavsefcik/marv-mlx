@@ -5,32 +5,32 @@ session and follow it). Keep answers short and direct; no emojis in commits.
 
 ## What this is
 
-**ymlx** is a zsh TUI for browsing, running and downloading local MLX LLMs on
+**marv-mlx** is a zsh TUI for browsing, running and downloading local MLX LLMs on
 Apple Silicon, exposing a drop-in OpenAI-compatible endpoint at
-`localhost:11500`. It also ships as a pi extension (`ymlx-sync`) that syncs/selects
-models in-pi and runs a headless `ymlx run`.
+`localhost:11500`. It also ships as a pi extension (`marv-mlx-sync`) that syncs/selects
+models in-pi and runs a headless `marv-mlx run`.
 
 ## Repos involved
 
-- `pavsefcik/ymlx` — this repo (zsh TUI + `install.sh` + Homebrew formula source).
-- `pavsefcik/ymlx-curator` — `ymlx-curator.md`, the hand-picked download catalog
+- `pavsefcik/marv-mlx` — this repo (zsh TUI + `install.sh` + Homebrew formula source).
+- `pavsefcik/marv-curator` — `marv-curator.md`, the hand-picked download catalog
   (flag-titled blocks consumed by the Download menu).
-- `pavsefcik/homebrew-ymlx` — the tap; `Formula/ymlx.rb` (path `../homebrew-ymlx`).
+- `pavsefcik/homebrew-marv-mlx` — the tap; `Formula/marv-mlx.rb` (path `../homebrew-marv-mlx`).
 
 ## Layout
 
-- `ymlx.zsh` — the whole TUI (one large file, ~75KB). Read it in full before
+- `marv-mlx.zsh` — the whole TUI (one large file, ~75KB). Read it in full before
   wide-ranging edits.
-- `ymlx-launcher.zsh` — sourced from `~/.zshrc`; provides the `ymlx` shell entry.
+- `marv-mlx-launcher.zsh` — sourced from `~/.zshrc`; provides the `marv-mlx` shell entry.
 - `install.sh` — standalone installer (brew `uv`/`gum`, `mlx-vlm` as a uv tool,
   pi extension + wrapper, wires `~/.zshrc`).
-- `lib/` — `ymlx_repl.py` (chat REPL), `ymlx-helpers.zsh`, `sitecustomize.py`
+- `lib/` — `marv_mlx_repl.py` (chat REPL), `marv-mlx-helpers.zsh`, `sitecustomize.py`
   (setproctitle for process renaming).
-- `extensions/ymlx-sync.ts` — pi extension (symlinked/copied into
+- `extensions/marv-mlx-sync.ts` — pi extension (symlinked/copied into
   `~/.pi/agent/extensions/`).
 - `scripts/` — one-off migration scripts.
 - `tests/` — Python unittest (`mock_server.py`, `test_integration_repl.py`,
-  `test_ymlx_repl.py`) + zsh helper tests (`test_helpers.zsh`).
+  `test_marv_mlx_repl.py`) + zsh helper tests (`test_helpers.zsh`).
 - `Makefile` — release tooling.
 
 ## Commands
@@ -69,21 +69,30 @@ Step 4 (`install.sh`) is the fragile part. It must:
   `--force` on later installs so uv can overwrite it cleanly.
 
 Step 5 wires `$UV_TOOL_BIN` into `~/.zshrc` PATH; step 8 sources
-`ymlx-launcher.zsh` from `~/.zshrc`. Both write with `>>` (creates `.zshrc` if
+`marv-mlx-launcher.zsh` from `~/.zshrc`. Both write with `>>` (creates `.zshrc` if
 missing).
+
+## Migration
+
+- **Rename shim (one release).** `_marv_mlx_migrate_legacy_state`
+  (`lib/marv-mlx-helpers.zsh`) copies `~/.cache/ymlx` to `~/.cache/marv/mlx`,
+  rewrites the old managed-block markers/`YMLX_QUICK_*` names in `config.zsh`,
+  fixes the `~/.zshrc` launcher line, and removes stale `ymlx` pi wrapper/extension
+  copies. It is idempotent and target-absent guarded (never destructive). It runs
+  before the new state dir is created. Remove it once the rename is fully absorbed.
 
 ## Known pitfalls
 
 - **raw.githubusercontent.com CDN lags `main`.** After pushing, the one-liner
-  `curl -fsSL .../ymlx/main/install.sh | sh` may serve a stale commit for a
+  `curl -fsSL .../marv-mlx/main/install.sh | sh` may serve a stale commit for a
   while. For a guaranteed-correct test, pin the URL to the full commit SHA:
-  `.../pavsefcik/ymlx/<full-sha>/install.sh`. Verify content (e.g.
+  `.../pavsefcik/marv-mlx/<full-sha>/install.sh`. Verify content (e.g.
   `grep -c 'mlx-vlm@0.7.4'`) before trusting it.
 - **GitHub push can be rejected with `GH007`** ("publish a private email").
   This repo uses the noreply email `187490479+pavsefcik@users.noreply.github.com`
   (set repo-locally as `user.email`). Keep using it for commits; don't reintroduce
   the private email.
-- **Flags in the Download menu are cosmetic.** The `ymlx-curator.md` titles
+- **Flags in the Download menu are cosmetic.** The `marv-curator.md` titles
   carry flags with a space; if the flag looks glued to the name it's a terminal
   emoji-width rendering artifact, not a bug. The download model ID comes from
   the subtitle line, never from the flag/title.

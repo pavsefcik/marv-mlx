@@ -2,35 +2,35 @@
 
 unsetopt xtrace verbose 2>/dev/null
 
-# Pids ymlx launched in this shell session. The EXIT trap kills these so child
+# Pids marv-mlx launched in this shell session. The EXIT trap kills these so child
 # servers don't outlive their manager. Servers from other sessions or external
-# processes are discovered live via lsof+ps in _ymlx_running and aren't tracked
+# processes are discovered live via lsof+ps in _marv_mlx_running and aren't tracked
 # here, so we won't kill what we didn't start.
-typeset -ga _YMLX_SESSION_PIDS=()
+typeset -ga _MARV_MLX_SESSION_PIDS=()
 
-# Port chosen by the most recent _ymlx_launch (for callers that need to know
+# Port chosen by the most recent _marv_mlx_launch (for callers that need to know
 # where a freshly launched model landed, e.g. parallel runs).
-typeset -g _YMLX_LAST_LAUNCH_PORT=""
+typeset -g _MARV_MLX_LAST_LAUNCH_PORT=""
 
-# Self-contained helpers (no dependence on ymlx()'s locals) live in lib/.
-local _YMLX_SRC_DIR="${0:A:h}"
-source "$_YMLX_SRC_DIR/lib/ymlx-helpers.zsh"
+# Self-contained helpers (no dependence on marv-mlx()'s locals) live in lib/.
+local _MARV_MLX_SRC_DIR="${0:A:h}"
+source "$_MARV_MLX_SRC_DIR/lib/marv-mlx-helpers.zsh"
 
-ymlx() {
-  local YMLX_DEBUG=false
+marv-mlx() {
+  local MARV_MLX_DEBUG=false
   local hub_dir=~/.cache/huggingface/hub
-  local state_dir=~/.cache/ymlx
+  local state_dir=~/.cache/marv/mlx
   local log_dir="$state_dir/logs"
   local config_file="$state_dir/config.zsh"
   local chat_dir="$state_dir/chats"
 
-  typeset -ga YMLX_CHAT_FLAGS=( --max-tokens 2048 --temperature 0.7 )
-  typeset -ga YMLX_SERVER_FLAGS=()
+  typeset -ga MARV_MLX_CHAT_FLAGS=( --max-tokens 2048 --temperature 0.7 )
+  typeset -ga MARV_MLX_SERVER_FLAGS=()
 
   # Version query: handled before the tool check so it works even on a
   # half-broken install — reporting the version shouldn't depend on gum/uvx.
   if [[ $# -eq 1 && "$1" == (-v|--version|-V|version) ]]; then
-    print "$(<"$_YMLX_SRC_DIR/VERSION" 2>/dev/null | tr -d '[:space:]')"
+    print "$(<"$_MARV_MLX_SRC_DIR/VERSION" 2>/dev/null | tr -d '[:space:]')"
     return 0
   fi
 
@@ -45,15 +45,15 @@ ymlx() {
     # automation (pi's model_select hook) fails loudly and fast.
     if (( $# == 0 && ${#missing[@]} == 1 && ${missing[1]} == "mlx_vlm.server" )) \
        && command -v uv >/dev/null 2>&1; then
-      print -u2 "ymlx: mlx-vlm not installed — installing (one-time)…"
+      print -u2 "marv-mlx: mlx-vlm not installed — installing (one-time)…"
       if uv tool install mlx-vlm --with jinja2 >/dev/null 2>&1 \
          && command -v mlx_vlm.server >/dev/null 2>&1; then
-        print -u2 "ymlx: mlx-vlm installed."
+        print -u2 "marv-mlx: mlx-vlm installed."
         missing=()
       fi
     fi
     if (( ${#missing[@]} > 0 )); then
-      print -u2 "ymlx: missing required tool(s): ${missing[*]}"
+      print -u2 "marv-mlx: missing required tool(s): ${missing[*]}"
       print -u2 ""
       print -u2 "Install with:"
       print -u2 "  brew install uv gum && uv tool install mlx-vlm --with jinja2"
@@ -61,24 +61,29 @@ ymlx() {
     fi
   fi
 
+  # One-time migration from the old `ymlx` layout (idempotent; no-op after the
+  # first run). Must run BEFORE creating the new state dir so the target-absent
+  # guard holds.
+  _marv_mlx_migrate_legacy_state
+
   mkdir -p "$state_dir" "$log_dir" "$chat_dir"
 
-  # The curated download list lives in the standalone ymlx-curator repo; pull
+  # The curated download list lives in the standalone marv-curator repo; pull
   # the latest copy at startup and cache it. Retry a few times, then fall back
   # to the github.com mirror, and only if both fail use the last cached copy.
-  local curated_url="https://raw.githubusercontent.com/pavsefcik/ymlx-curator/main/ymlx-curator.md"
-  local curated_mirror="https://github.com/pavsefcik/ymlx-curator/raw/main/ymlx-curator.md"
+  local curated_url="https://raw.githubusercontent.com/pavsefcik/marv-curator/main/marv-curator.md"
+  local curated_mirror="https://github.com/pavsefcik/marv-curator/raw/main/marv-curator.md"
   local curated_file="$state_dir/curated-llms.md"
   local curated_tmp="$curated_file.tmp" curated_refreshed=0 attempt
   # CLI verbs that don't need the Download menu skip the fetch entirely, so they
   # stay fast and work offline (status/list/info/stop/chat/run/…) before dispatch.
   # `curated` is deliberately absent: it IS the catalog command, so it wants the
   # fresh list (and falls back to the cache offline).
-  local _YMLX_NEEDS_CURATED=1
+  local _MARV_MLX_NEEDS_CURATED=1
   case "${1:-}" in
-    status|list|ls|info|endpoint|stop|run|serve|chat|download|version|-v|--version|-V|help|-h|--help) _YMLX_NEEDS_CURATED=0 ;;
+    status|list|ls|info|endpoint|stop|run|serve|chat|download|version|-v|--version|-V|help|-h|--help) _MARV_MLX_NEEDS_CURATED=0 ;;
   esac
-  if (( _YMLX_NEEDS_CURATED )); then
+  if (( _MARV_MLX_NEEDS_CURATED )); then
   for attempt in 1 2 3; do
     if curl -fsSL --connect-timeout 8 --max-time 20 "$curated_url" -o "$curated_tmp" 2>/dev/null \
        && [[ -s "$curated_tmp" ]]; then
@@ -97,33 +102,33 @@ ymlx() {
   if (( curated_refreshed == 0 )); then
     [[ -f "$curated_file" ]] || : > "$curated_file"
     if (( $# == 0 )); then
-      print -u2 "ymlx: couldn't refresh the curated model list — using the cached copy."
+      print -u2 "marv-mlx: couldn't refresh the curated model list — using the cached copy."
     fi
   fi
-  fi  # _YMLX_NEEDS_CURATED
+  fi  # _MARV_MLX_NEEDS_CURATED
   rm -f "$curated_tmp"
 
-  _ymlx_write_default_config() {
+  _marv_mlx_write_default_config() {
     cat > "$1" <<'CFG'
-# ymlx config — sourced on startup. Use "Basic settings" in the main menu for the
+# marv-mlx config — sourced on startup. Use "Basic settings" in the main menu for the
 # common toggles (thinking / temp / max-tokens / system prompt); they live in
-# the managed block below and ymlx rewrites it. Hand-edit anything below the
+# the managed block below and marv-mlx rewrites it. Hand-edit anything below the
 # block to add advanced flags — see `mlx_vlm.chat --help` / `mlx_vlm.server --help`.
-# --model / --port / --host are managed by ymlx (prefers :11500; parallel runs
+# --model / --port / --host are managed by marv-mlx (prefers :11500; parallel runs
 # take the next free port).
 
-# >>> ymlx-managed quick settings — edit via "Basic settings" <<<
-YMLX_QUICK_THINKING="default"      # default | on | off  (default = use model's built-in)
-YMLX_QUICK_TEMP=""                 # e.g. 0.7, or empty to use YMLX_CHAT_FLAGS default
-YMLX_QUICK_MAX_TOKENS=""           # e.g. 2048, or empty to use YMLX_CHAT_FLAGS default
-YMLX_QUICK_SYSTEM_PROMPT=""        # chat only; empty disables
-# <<< end ymlx-managed >>>
+# >>> marv-mlx-managed quick settings — edit via "Basic settings" <<<
+MARV_MLX_QUICK_THINKING="default"      # default | on | off  (default = use model's built-in)
+MARV_MLX_QUICK_TEMP=""                 # e.g. 0.7, or empty to use MARV_MLX_CHAT_FLAGS default
+MARV_MLX_QUICK_MAX_TOKENS=""           # e.g. 2048, or empty to use MARV_MLX_CHAT_FLAGS default
+MARV_MLX_QUICK_SYSTEM_PROMPT=""        # chat only; empty disables
+# <<< end marv-mlx-managed >>>
 
 # CHAT_FLAGS are informational: the built-in REPL talks to the running server
 # over HTTP, so the SERVER_FLAGS below are the ones that take effect at runtime.
-# Thinking is per-model-family: ymlx resolves it at launch and per request
+# Thinking is per-model-family: marv-mlx resolves it at launch and per request
 # (see the "Thinking" quick setting), so it is not written here.
-YMLX_CHAT_FLAGS=(
+MARV_MLX_CHAT_FLAGS=(
   --max-tokens 2048
   --temperature 0.7
   # --thinking-budget 100
@@ -134,7 +139,7 @@ YMLX_CHAT_FLAGS=(
   # --quantized-kv-start 2048
 )
 
-YMLX_SERVER_FLAGS=(
+MARV_MLX_SERVER_FLAGS=(
   # --max-tokens 2048
   # --thinking-budget 100
   # --draft-model mlx-community/some-draft-model
@@ -158,33 +163,33 @@ YMLX_SERVER_FLAGS=(
 CFG
   }
 
-  typeset -g YMLX_QUICK_THINKING="default"
-  typeset -g YMLX_QUICK_TEMP=""
-  typeset -g YMLX_QUICK_MAX_TOKENS=""
-  typeset -g YMLX_QUICK_SYSTEM_PROMPT=""
-  typeset -g _YMLX_TMP_CFG=""
-  typeset -g _YMLX_STTY_SAVED=""
-  typeset -g _YMLX_MENU_QUIT=0
-  typeset -gi _YMLX_HF_SKIPPED=0
-  typeset -g _YMLX_MENU_KEY=""
-  typeset -ga _YMLX_MENU_LINES=()
-  typeset -ga _YMLX_MENU_KINDS=()
-  typeset -ga _YMLX_MENU_MODELS=()
-  typeset -ga _YMLX_MENU_PORTS=()
-  typeset -ga _YMLX_MENU_ACTIONS=()
-  typeset -ga _YMLX_MENU_PAIRS=()
-  typeset -gi _YMLX_MENU_CURSOR=0
-  typeset -gi _YMLX_MENU_SCROLL=0
-  typeset -gi _YMLX_MENU_VIS=10
-  typeset -gi _YMLX_MENU_WIDTH=80
-  typeset -gi _YMLX_MENU_DRAWN=0
-  typeset -gi _YMLX_MENU_NLINES=0
-  typeset -gi _YMLX_MENU_NO_MODELS=0
-  typeset -g _YMLX_UPDATE_NEW=""
-  typeset -g _YMLX_UPDATE_INSTALLED=""
-  _YMLX_STTY_SAVED="$(stty -g 2>/dev/null)"
+  typeset -g MARV_MLX_QUICK_THINKING="default"
+  typeset -g MARV_MLX_QUICK_TEMP=""
+  typeset -g MARV_MLX_QUICK_MAX_TOKENS=""
+  typeset -g MARV_MLX_QUICK_SYSTEM_PROMPT=""
+  typeset -g _MARV_MLX_TMP_CFG=""
+  typeset -g _MARV_MLX_STTY_SAVED=""
+  typeset -g _MARV_MLX_MENU_QUIT=0
+  typeset -gi _MARV_MLX_HF_SKIPPED=0
+  typeset -g _MARV_MLX_MENU_KEY=""
+  typeset -ga _MARV_MLX_MENU_LINES=()
+  typeset -ga _MARV_MLX_MENU_KINDS=()
+  typeset -ga _MARV_MLX_MENU_MODELS=()
+  typeset -ga _MARV_MLX_MENU_PORTS=()
+  typeset -ga _MARV_MLX_MENU_ACTIONS=()
+  typeset -ga _MARV_MLX_MENU_PAIRS=()
+  typeset -gi _MARV_MLX_MENU_CURSOR=0
+  typeset -gi _MARV_MLX_MENU_SCROLL=0
+  typeset -gi _MARV_MLX_MENU_VIS=10
+  typeset -gi _MARV_MLX_MENU_WIDTH=80
+  typeset -gi _MARV_MLX_MENU_DRAWN=0
+  typeset -gi _MARV_MLX_MENU_NLINES=0
+  typeset -gi _MARV_MLX_MENU_NO_MODELS=0
+  typeset -g _MARV_MLX_UPDATE_NEW=""
+  typeset -g _MARV_MLX_UPDATE_INSTALLED=""
+  _MARV_MLX_STTY_SAVED="$(stty -g 2>/dev/null)"
 
-  _ymlx_talk_info() {
+  _marv_mlx_talk_info() {
     local m="$1" p="$2"
     gum style --foreground 212 --bold "Use from another app"
     echo "  Drop-in OpenAI-compatible endpoint. Most apps that work with OpenAI"
@@ -200,38 +205,38 @@ CFG
     gum style --foreground 244 "      -d '{\"model\":\"$m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}'"
   }
 
-  _ymlx_chat_repl() {
+  _marv_mlx_chat_repl() {
     local model="$1" port="$2"
     local resume="${3:-}"
     if ! command -v python3 >/dev/null 2>&1; then
       gum style --foreground 196 "python3 not found — install Xcode Command Line Tools (xcode-select --install) to use the built-in chat."
-      _ymlx_pause
+      _marv_mlx_pause
       return 1
     fi
-    if [[ ! -f "$_YMLX_SRC_DIR/lib/ymlx_repl.py" ]]; then
-      gum style --foreground 196 "chat REPL missing ($_YMLX_SRC_DIR/lib/ymlx_repl.py) — re-run install.sh or /ymlx-setup."
-      _ymlx_pause
+    if [[ ! -f "$_MARV_MLX_SRC_DIR/lib/marv_mlx_repl.py" ]]; then
+      gum style --foreground 196 "chat REPL missing ($_MARV_MLX_SRC_DIR/lib/marv_mlx_repl.py) — re-run install.sh or /marv-mlx-setup."
+      _marv_mlx_pause
       return 1
     fi
-    local sysp="$YMLX_QUICK_SYSTEM_PROMPT"
+    local sysp="$MARV_MLX_QUICK_SYSTEM_PROMPT"
     local rc ministral_other co chat_log url friendly spec control markers rf
     while true; do
-      sysp="$YMLX_QUICK_SYSTEM_PROMPT"
+      sysp="$MARV_MLX_QUICK_SYSTEM_PROMPT"
       url="http://127.0.0.1:$port/v1/chat/completions"
-      friendly=$(_ymlx_display_name "$model")
-      local thinking="${YMLX_QUICK_THINKING:-default}"
+      friendly=$(_marv_mlx_display_name "$model")
+      local thinking="${MARV_MLX_QUICK_THINKING:-default}"
       local stamp safe
       # Ministral ships as an Instruct+Reasoning pair; tab swaps to the sibling
       # (the REPL exits 3 to request it).
       ministral_other=""
       if [[ "${model##*/}" == *-Instruct-* || "${model##*/}" == *-Reasoning-* ]]; then
-        co=$(_ymlx_ministral_sibling "$model")
+        co=$(_marv_mlx_ministral_sibling "$model")
         [[ -d "$hub_dir/models--${co//\//--}" ]] && ministral_other="$co"
       fi
       # Thinking is per-family. Only an explicit "on" shows a reasoning trace
       # (both "default" and "off" hide it). The family decides the control knob
       # and the inline marker set; the REPL gets both.
-      spec=$(_ymlx_thinking_spec "$model" "$hub_dir")
+      spec=$(_marv_mlx_thinking_spec "$model" "$hub_dir")
       control="${spec%%$'\t'*}"; spec="${spec#*$'\t'}"
       markers="${spec%%$'\t'*}"; rf="${spec#*$'\t'}"
       local is_reasoning=0
@@ -279,8 +284,8 @@ CFG
         --control "$control"
         --markers "$markers"
         --chat-log "$chat_log"
-        --temperature "$YMLX_QUICK_TEMP"
-        --max-tokens "$YMLX_QUICK_MAX_TOKENS"
+        --temperature "$MARV_MLX_QUICK_TEMP"
+        --max-tokens "$MARV_MLX_QUICK_MAX_TOKENS"
         --resume "$resume"
         --sibling "$ministral_other"
       )
@@ -290,14 +295,14 @@ CFG
       # setproctitle importable; if it isn't reachable (e.g. offline, first
       # run) we fall back to plain python3 — same chat, same exit codes, just
       # no rename.
-      local libprefix="$_YMLX_SRC_DIR/lib${PYTHONPATH:+:$PYTHONPATH}"
+      local libprefix="$_MARV_MLX_SRC_DIR/lib${PYTHONPATH:+:$PYTHONPATH}"
       if command -v uvx >/dev/null 2>&1 && \
-         YMLX_PROCTITLE="$model" PYTHONPATH="$libprefix" \
+         MARV_MLX_PROCTITLE="$model" PYTHONPATH="$libprefix" \
            uvx --from setproctitle --quiet python3 -c 'import setproctitle' >/dev/null 2>&1; then
-        YMLX_PROCTITLE="$model" PYTHONPATH="$libprefix" \
-          uvx --from setproctitle --quiet python3 "$_YMLX_SRC_DIR/lib/ymlx_repl.py" "${repl_args[@]}"
+        MARV_MLX_PROCTITLE="$model" PYTHONPATH="$libprefix" \
+          uvx --from setproctitle --quiet python3 "$_MARV_MLX_SRC_DIR/lib/marv_mlx_repl.py" "${repl_args[@]}"
       else
-        python3 "$_YMLX_SRC_DIR/lib/ymlx_repl.py" "${repl_args[@]}"
+        python3 "$_MARV_MLX_SRC_DIR/lib/marv_mlx_repl.py" "${repl_args[@]}"
       fi
       rc=$?
       if (( rc != 3 )); then
@@ -308,65 +313,65 @@ CFG
         return 3   # safety: shouldn't happen
       fi
       print -r -- "$ministral_other" > "$state_dir/ministral-default"
-      _ymlx_ministral_swap_to "$ministral_other" "$model" "$port" || return 1
+      _marv_mlx_ministral_swap_to "$ministral_other" "$model" "$port" || return 1
       model="$ministral_other"
-      port="$_YMLX_LAST_LAUNCH_PORT"
+      port="$_MARV_MLX_LAST_LAUNCH_PORT"
       resume=""
     done
   }
 
-  _ymlx_apply_quick() {
+  _marv_mlx_apply_quick() {
     # Thinking is per-model-family and applied at launch / per request (see
-    # _ymlx_apply_launch_thinking and lib/ymlx_repl.py), so it is NOT written
-    # into YMLX_SERVER_FLAGS here — that would be a second source of truth.
-    if [[ -n "$YMLX_QUICK_TEMP" ]]; then
-      _ymlx_replace_or_append YMLX_CHAT_FLAGS --temperature "$YMLX_QUICK_TEMP"
+    # _marv_mlx_apply_launch_thinking and lib/marv_mlx_repl.py), so it is NOT written
+    # into MARV_MLX_SERVER_FLAGS here — that would be a second source of truth.
+    if [[ -n "$MARV_MLX_QUICK_TEMP" ]]; then
+      _marv_mlx_replace_or_append MARV_MLX_CHAT_FLAGS --temperature "$MARV_MLX_QUICK_TEMP"
       # mlx_vlm.server has no server-level temperature flag — temperature is a
       # per-request field, which the chat REPL sends (and API clients send).
     fi
-    if [[ -n "$YMLX_QUICK_MAX_TOKENS" ]]; then
-      _ymlx_replace_or_append YMLX_CHAT_FLAGS --max-tokens "$YMLX_QUICK_MAX_TOKENS"
-      _ymlx_replace_or_append YMLX_SERVER_FLAGS --max-tokens "$YMLX_QUICK_MAX_TOKENS"
+    if [[ -n "$MARV_MLX_QUICK_MAX_TOKENS" ]]; then
+      _marv_mlx_replace_or_append MARV_MLX_CHAT_FLAGS --max-tokens "$MARV_MLX_QUICK_MAX_TOKENS"
+      _marv_mlx_replace_or_append MARV_MLX_SERVER_FLAGS --max-tokens "$MARV_MLX_QUICK_MAX_TOKENS"
     fi
     # System prompts are per-request only: mlx_vlm has no --system-prompt flag
-    # (server or chat), and YMLX_CHAT_FLAGS is informational, so there is
-    # nothing to write here — the chat REPL injects YMLX_QUICK_SYSTEM_PROMPT
+    # (server or chat), and MARV_MLX_CHAT_FLAGS is informational, so there is
+    # nothing to write here — the chat REPL injects MARV_MLX_QUICK_SYSTEM_PROMPT
     # into the request messages and API clients pass it in the body.
   }
 
-  # Rewrite the managed block in config.zsh from current YMLX_QUICK_* values.
+  # Rewrite the managed block in config.zsh from current MARV_MLX_QUICK_* values.
   # Preserves everything outside the markers; inserts at top if no block exists.
-  _ymlx_write_managed_block() {
+  _marv_mlx_write_managed_block() {
     local cf="$1" tmp="$cf.tmp"
     local has_block=0
-    grep -q '^# >>> ymlx-managed' "$cf" && has_block=1
+    grep -q '^# >>> marv-mlx-managed' "$cf" && has_block=1
     {
       if (( ! has_block )); then
         printf '%s\n' \
-          '# >>> ymlx-managed quick settings — edit via "Basic settings" <<<' \
-          "YMLX_QUICK_THINKING=${(qq)YMLX_QUICK_THINKING}" \
-          "YMLX_QUICK_TEMP=${(qq)YMLX_QUICK_TEMP}" \
-          "YMLX_QUICK_MAX_TOKENS=${(qq)YMLX_QUICK_MAX_TOKENS}" \
-          "YMLX_QUICK_SYSTEM_PROMPT=${(qq)YMLX_QUICK_SYSTEM_PROMPT}" \
-          '# <<< end ymlx-managed >>>' \
+          '# >>> marv-mlx-managed quick settings — edit via "Basic settings" <<<' \
+          "MARV_MLX_QUICK_THINKING=${(qq)MARV_MLX_QUICK_THINKING}" \
+          "MARV_MLX_QUICK_TEMP=${(qq)MARV_MLX_QUICK_TEMP}" \
+          "MARV_MLX_QUICK_MAX_TOKENS=${(qq)MARV_MLX_QUICK_MAX_TOKENS}" \
+          "MARV_MLX_QUICK_SYSTEM_PROMPT=${(qq)MARV_MLX_QUICK_SYSTEM_PROMPT}" \
+          '# <<< end marv-mlx-managed >>>' \
           ''
       fi
       local in_block=0 line
       # `|| [[ -n "$line" ]]` keeps a final line that lacks a trailing newline
       # (a plain `while read` would drop it and truncate the file).
       while IFS= read -r line || [[ -n "$line" ]]; do
-        if [[ "$line" == '# >>> ymlx-managed'* ]]; then
+        if [[ "$line" == '# >>> marv-mlx-managed'* ]]; then
           in_block=1
           printf '%s\n' \
-            '# >>> ymlx-managed quick settings — edit via "Basic settings" <<<' \
-            "YMLX_QUICK_THINKING=${(qq)YMLX_QUICK_THINKING}" \
-            "YMLX_QUICK_TEMP=${(qq)YMLX_QUICK_TEMP}" \
-            "YMLX_QUICK_MAX_TOKENS=${(qq)YMLX_QUICK_MAX_TOKENS}" \
-            "YMLX_QUICK_SYSTEM_PROMPT=${(qq)YMLX_QUICK_SYSTEM_PROMPT}" \
-            '# <<< end ymlx-managed >>>'
+            '# >>> marv-mlx-managed quick settings — edit via "Basic settings" <<<' \
+            "MARV_MLX_QUICK_THINKING=${(qq)MARV_MLX_QUICK_THINKING}" \
+            "MARV_MLX_QUICK_TEMP=${(qq)MARV_MLX_QUICK_TEMP}" \
+            "MARV_MLX_QUICK_MAX_TOKENS=${(qq)MARV_MLX_QUICK_MAX_TOKENS}" \
+            "MARV_MLX_QUICK_SYSTEM_PROMPT=${(qq)MARV_MLX_QUICK_SYSTEM_PROMPT}" \
+            '# <<< end marv-mlx-managed >>>'
           continue
         fi
-        if [[ "$line" == '# <<< end ymlx-managed'* ]]; then
+        if [[ "$line" == '# <<< end marv-mlx-managed'* ]]; then
           in_block=0
           continue
         fi
@@ -377,19 +382,19 @@ CFG
     mv "$tmp" "$cf"
   }
 
-  _ymlx_reload_config() {
+  _marv_mlx_reload_config() {
     source "$config_file"
-    _ymlx_apply_quick
+    _marv_mlx_apply_quick
   }
 
-  _ymlx_basic_settings_menu() {
+  _marv_mlx_basic_settings_menu() {
     while true; do
-      local cur_t="${YMLX_QUICK_THINKING:-default}"
-      local cur_temp="${YMLX_QUICK_TEMP:-default}"
-      local cur_max="${YMLX_QUICK_MAX_TOKENS:-default}"
+      local cur_t="${MARV_MLX_QUICK_THINKING:-default}"
+      local cur_temp="${MARV_MLX_QUICK_TEMP:-default}"
+      local cur_max="${MARV_MLX_QUICK_MAX_TOKENS:-default}"
       local cur_sys
-      if [[ -n "$YMLX_QUICK_SYSTEM_PROMPT" ]]; then
-        cur_sys="(${#YMLX_QUICK_SYSTEM_PROMPT} chars)"
+      if [[ -n "$MARV_MLX_QUICK_SYSTEM_PROMPT" ]]; then
+        cur_sys="(${#MARV_MLX_QUICK_SYSTEM_PROMPT} chars)"
       else
         cur_sys="(none)"
       fi
@@ -405,24 +410,24 @@ CFG
       case "$choice" in
         "Thinking:"*)
           local pick=$(printf "default\noff\non" | gum choose --header "Thinking? (default and off both mean off; on shows the reasoning trace)")
-          [[ -n "$pick" ]] && YMLX_QUICK_THINKING="$pick"
+          [[ -n "$pick" ]] && MARV_MLX_QUICK_THINKING="$pick"
           ;;
         "Temperature:"*)
           local pick=$(printf "default\n0.0\n0.3\n0.7\n1.0\nCustom…" | gum choose --header "Temperature")
           case "$pick" in
-            default) YMLX_QUICK_TEMP="" ;;
-            "Custom…") YMLX_QUICK_TEMP=$(gum input --placeholder "e.g. 0.5" --value "$YMLX_QUICK_TEMP") ;;
+            default) MARV_MLX_QUICK_TEMP="" ;;
+            "Custom…") MARV_MLX_QUICK_TEMP=$(gum input --placeholder "e.g. 0.5" --value "$MARV_MLX_QUICK_TEMP") ;;
             "") ;;
-            *) YMLX_QUICK_TEMP="$pick" ;;
+            *) MARV_MLX_QUICK_TEMP="$pick" ;;
           esac
           ;;
         "Max tokens:"*)
           local pick=$(printf "default\n512\n2048\n8192\n32768\nCustom…" | gum choose --header "Max tokens")
           case "$pick" in
-            default) YMLX_QUICK_MAX_TOKENS="" ;;
-            "Custom…") YMLX_QUICK_MAX_TOKENS=$(gum input --placeholder "e.g. 4096" --value "$YMLX_QUICK_MAX_TOKENS") ;;
+            default) MARV_MLX_QUICK_MAX_TOKENS="" ;;
+            "Custom…") MARV_MLX_QUICK_MAX_TOKENS=$(gum input --placeholder "e.g. 4096" --value "$MARV_MLX_QUICK_MAX_TOKENS") ;;
             "") ;;
-            *) YMLX_QUICK_MAX_TOKENS="$pick" ;;
+            *) MARV_MLX_QUICK_MAX_TOKENS="$pick" ;;
           esac
           ;;
         "System prompt:"*)
@@ -430,66 +435,66 @@ CFG
           case "$sub" in
             Edit)
               local new
-              new=$(gum write --placeholder "Type system prompt — Ctrl-D to save, Esc to cancel" --value "$YMLX_QUICK_SYSTEM_PROMPT" --width 80 --height 12)
-              [[ $? -eq 0 && -n "$new" ]] && YMLX_QUICK_SYSTEM_PROMPT="$new"
+              new=$(gum write --placeholder "Type system prompt — Ctrl-D to save, Esc to cancel" --value "$MARV_MLX_QUICK_SYSTEM_PROMPT" --width 80 --height 12)
+              [[ $? -eq 0 && -n "$new" ]] && MARV_MLX_QUICK_SYSTEM_PROMPT="$new"
               ;;
-            Clear) YMLX_QUICK_SYSTEM_PROMPT="" ;;
+            Clear) MARV_MLX_QUICK_SYSTEM_PROMPT="" ;;
           esac
           ;;
       esac
-      _ymlx_write_managed_block "$config_file"
-      _ymlx_reload_config
+      _marv_mlx_write_managed_block "$config_file"
+      _marv_mlx_reload_config
     done
   }
 
-  _ymlx_advanced_settings_menu() {
-    local ed=$(_ymlx_pick_editor)
+  _marv_mlx_advanced_settings_menu() {
+    local ed=$(_marv_mlx_pick_editor)
     eval "$ed \"\$config_file\""
-    _ymlx_reload_config
+    _marv_mlx_reload_config
   }
 
-  _ymlx_open_models_folder() {
+  _marv_mlx_open_models_folder() {
     open "$hub_dir"
   }
 
-  _ymlx_open_chat_folder() {
+  _marv_mlx_open_chat_folder() {
     open "$chat_dir"
   }
 
   # Swap a running Ministral half for its sibling: stop only that half (leaving
   # any other parallel model alone), wait for its port, then relaunch there.
   # Returns 0 if the new server came up.
-  _ymlx_ministral_swap_to() {
+  _marv_mlx_ministral_swap_to() {
     local new="$1" old_model="$2" old_port="$3"
     local pid port model
     while IFS=$'\t' read -r pid port model; do
-      [[ -n "$pid" && "$model" == "$old_model" ]] && { kill "$pid" 2>/dev/null; _ymlx_drop "$pid"; }
-    done < <(_ymlx_running)
+      [[ -n "$pid" && "$model" == "$old_model" ]] && { kill "$pid" 2>/dev/null; _marv_mlx_drop "$pid"; }
+    done < <(_marv_mlx_running)
     local i
     for i in {1..40}; do
-      _ymlx_port_free "$old_port" && break
+      _marv_mlx_port_free "$old_port" && break
       sleep 0.2
     done
-    _ymlx_launch "$new" "$old_port"
+    _marv_mlx_launch "$new" "$old_port"
   }
 
-  _ymlx_main_restart() {
-    _ymlx_main_clear
+  _marv_mlx_main_restart() {
+    _marv_mlx_main_clear
     local -a running_models=()
     local pid port model
     while IFS=$'\t' read -r pid port model; do
       [[ -n "$model" ]] && running_models+=( "$model" )
-    done < <(_ymlx_running)
+    done < <(_marv_mlx_running)
     if (( ${#running_models} )); then
-      _ymlx_stop_all >/dev/null 2>&1
+      _marv_mlx_stop_all >/dev/null 2>&1
       local i
       for i in {1..40}; do
-        _ymlx_port_free 11500 && break
+        _marv_mlx_port_free 11500 && break
         sleep 0.2
       done
       for model in "${running_models[@]}"; do
         echo "Restarting: $model"
-        _ymlx_launch "$model"
+        _marv_mlx_launch "$model"
       done
     else
       echo "No model is running — nothing to restart."
@@ -497,33 +502,33 @@ CFG
     fi
   }
 
-  [[ -f "$config_file" ]] || _ymlx_write_default_config "$config_file"
-  _ymlx_reload_config
+  [[ -f "$config_file" ]] || _marv_mlx_write_default_config "$config_file"
+  _marv_mlx_reload_config
 
 #
 # HuggingFace token handling. mlx-vlm downloads models from the HF Hub; without
 # a token it warns "sending unauthenticated requests". These helpers expose an
 # existing token (env or the on-disk cache that `huggingface-cli login` / an
-# earlier ymlx login wrote) and offer a one-shot wizard to save one.
+# earlier marv-mlx login wrote) and offer a one-shot wizard to save one.
 #
-_ymlx_hf_token_file() {
+_marv_mlx_hf_token_file() {
   print -r -- "${HF_HOME:-$HOME/.cache/huggingface}/token"
 }
 
-_ymlx_hf_has_token() {
+_marv_mlx_hf_has_token() {
   [[ -n "$HF_TOKEN" ]] && return 0
-  [[ -s "$(_ymlx_hf_token_file)" ]] && return 0
+  [[ -s "$(_marv_mlx_hf_token_file)" ]] && return 0
   return 1
 }
 
-_ymlx_hf_setup() {
+_marv_mlx_hf_setup() {
   local action tok tf
-  tf=$(_ymlx_hf_token_file)
+  tf=$(_marv_mlx_hf_token_file)
   echo
   gum style --foreground 212 --bold "HuggingFace authentication"
-  gum style --foreground 250 "ymlx downloads models from the HuggingFace Hub. Adding a token gets you"
+  gum style --foreground 250 "marv-mlx downloads models from the HuggingFace Hub. Adding a token gets you"
   gum style --foreground 250 "higher rate limits + faster downloads and unlocks gated/private models."
-  gum style --foreground 244 "(Without one, ymlx just warns and still works for public models.)"
+  gum style --foreground 244 "(Without one, marv-mlx just warns and still works for public models.)"
   echo
   action=$(printf "Paste a token now\nSkip (public models only)" | gum choose --header "Hugging Face token?" --height 5)
   if [[ -z "$action" || "$action" != "Paste"* ]]; then
@@ -545,11 +550,11 @@ _ymlx_hf_setup() {
   return 0
 }
 
-# If a token is already on disk (written by an earlier ymlx login or by
+# If a token is already on disk (written by an earlier marv-mlx login or by
 # `uvx huggingface_hub[cli] huggingface-cli login`), export it so every download
 # subprocess this session is authenticated and the warning stops appearing.
-if [[ -z "$HF_TOKEN" && -s "$(_ymlx_hf_token_file)" ]]; then
-  export HF_TOKEN="$(<"$(_ymlx_hf_token_file)")"
+if [[ -z "$HF_TOKEN" && -s "$(_marv_mlx_hf_token_file)" ]]; then
+  export HF_TOKEN="$(<"$(_marv_mlx_hf_token_file)")"
 fi
 
 # Keep weight blobs inside each model's own folder (models--org--name/blobs/)
@@ -557,14 +562,14 @@ fi
 # huggingface_hub >=1.33 runs that Xet-backed shared-blob store by default,
 # so non-git files (large .safetensors, tokenizers) get deduplicated at the
 # hub root and a model folder only keeps symlinks to it — which reads as a
-# weird download if, like ymlx, you want each cache entry to be self-contained.
+# weird download if, like marv-mlx, you want each cache entry to be self-contained.
 # Disable it so huggingface_hub stores those blobs as regular files under the model dir.
 export HF_HUB_DISABLE_SHARED_BLOBS=1
 
-  # Discover running mlx_vlm.server instances on ymlx's ports (11500-11509) by
+  # Discover running mlx_vlm.server instances on marv-mlx's ports (11500-11509) by
   # asking the OS, not a state file. Emits one TSV line per server:
   # pid<TAB>port<TAB>model. The model id is parsed from the process's --model arg.
-  _ymlx_running() {
+  _marv_mlx_running() {
     local p lpid cmd m
     for p in {11500..11509}; do
       lpid=$(lsof -iTCP:"$p" -sTCP:LISTEN -t 2>/dev/null | head -n1)
@@ -586,51 +591,51 @@ export HF_HUB_DISABLE_SHARED_BLOBS=1
 
   # Remove a pid from the session-tracked list (called after we kill it, so
   # the EXIT trap doesn't redundantly target a dead pid).
-  _ymlx_drop() {
+  _marv_mlx_drop() {
     local target="$1" i
     local -a keep=()
-    for i in "${_YMLX_SESSION_PIDS[@]}"; do
+    for i in "${_MARV_MLX_SESSION_PIDS[@]}"; do
       [[ "$i" == "$target" ]] && continue
       keep+=( "$i" )
     done
-    _YMLX_SESSION_PIDS=( "${keep[@]}" )
+    _MARV_MLX_SESSION_PIDS=( "${keep[@]}" )
   }
 
-  _ymlx_stop_all() {
+  _marv_mlx_stop_all() {
     local pid port model
-    _YMLX_BYE_STOPPED=0
+    _MARV_MLX_BYE_STOPPED=0
     while IFS=$'\t' read -r pid port model; do
       if [[ -n "$pid" ]] && kill "$pid" 2>/dev/null; then
         echo "Stopped: $model (:$port)"
-        (( _YMLX_BYE_STOPPED++ ))
+        (( _MARV_MLX_BYE_STOPPED++ ))
       fi
-    done < <(_ymlx_running)
-    _YMLX_SESSION_PIDS=()
+    done < <(_marv_mlx_running)
+    _MARV_MLX_SESSION_PIDS=()
   }
 
-  _ymlx_launch() {
+  _marv_mlx_launch() {
     local model="$1" forced_port="${2:-}"
     local port
     if [[ -n "$forced_port" ]]; then
       port="$forced_port"
     else
-      port=$(_ymlx_find_port)
+      port=$(_marv_mlx_find_port)
     fi
     if [[ -z "$port" ]]; then
       echo "All ports :11500–:11509 are busy. Stop a running model (^s in the menu) first."
       return 1
     fi
-    _YMLX_LAST_LAUNCH_PORT="$port"
+    _MARV_MLX_LAST_LAUNCH_PORT="$port"
     local safe="${model//\//_}"
     local log="$log_dir/${safe}-${port}.log"
-    local -a launch_flags=( "${YMLX_SERVER_FLAGS[@]}" )
-    _ymlx_apply_launch_thinking launch_flags "$model" "$hub_dir"
-    # YMLX_PROCTITLE + PYTHONPATH make the server rename itself to the model
+    local -a launch_flags=( "${MARV_MLX_SERVER_FLAGS[@]}" )
+    _marv_mlx_apply_launch_thinking launch_flags "$model" "$hub_dir"
+    # MARV_MLX_PROCTITLE + PYTHONPATH make the server rename itself to the model
     # name in Activity Monitor / ps (see lib/sitecustomize.py).
-    YMLX_PROCTITLE="$model" PYTHONPATH="$_YMLX_SRC_DIR/lib${PYTHONPATH:+:$PYTHONPATH}" \
+    MARV_MLX_PROCTITLE="$model" PYTHONPATH="$_MARV_MLX_SRC_DIR/lib${PYTHONPATH:+:$PYTHONPATH}" \
       mlx_vlm.server --model "$model" --port "$port" "${launch_flags[@]}" >"$log" 2>&1 &
     local pid=$!
-    _YMLX_SESSION_PIDS+=( "$pid" )
+    _MARV_MLX_SESSION_PIDS+=( "$pid" )
     local rc=0
     gum spin --spinner dot --title "Initializing $model… (Ctrl-C to cancel)" -- zsh -c "
       local n=0
@@ -674,27 +679,27 @@ export HF_HUB_DISABLE_SHARED_BLOBS=1
       echo "Started: $model on :$port (pid $pid)"
       echo "Logs: $log"
       echo
-      _ymlx_talk_info "$model" "$port"
+      _marv_mlx_talk_info "$model" "$port"
     elif kill -0 "$pid" 2>/dev/null; then
       if gum confirm "Loading cancelled. Kill $model (pid $pid)?"; then
         kill "$pid" 2>/dev/null
-        _ymlx_drop "$pid"
+        _marv_mlx_drop "$pid"
         echo "Killed: $model"
       else
         echo "Still loading in background on :$port (pid $pid). Logs: $log"
       fi
     else
-      _ymlx_drop "$pid"
+      _marv_mlx_drop "$pid"
       echo "Failed to start $model. Last log lines:"
       tail -n 20 "$log"
     fi
     return $rc
   }
 
-  _ymlx_download_menu() {
+  _marv_mlx_download_menu() {
     local ram_gb=$(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1073741824 ))
     local tier_active
-    # Tiers in ymlx-curator.md are 8 / 16 / 32 GB; show only the machine's own
+    # Tiers in marv-curator.md are 8 / 16 / 32 GB; show only the machine's own
     # tier (no cross-tier models and no tier-header lines).
     if (( ram_gb >= 32 )); then
       tier_active=32
@@ -726,7 +731,7 @@ export HF_HUB_DISABLE_SHARED_BLOBS=1
         (( allinst )) && continue
         p_title+=( "$c_title" ); p_sub+=( "$c_ids" ); p_tags+=( "$c_tags" )
         p_desc+=( "$c_desc" ); p_tier+=( "$c_tier" )
-      done < <(_ymlx_parse_catalog "$curated_file")
+      done < <(_marv_mlx_parse_catalog "$curated_file")
     fi
 
     # Deduplicate by the model/sub line, keeping the first occurrence.
@@ -867,9 +872,9 @@ export HF_HUB_DISABLE_SHARED_BLOBS=1
       local sub="$1" title="$2" model="" ok=1
       # A Ministral block carries two ids ('instruct & reasoning'); download both.
       local -a dl=( ${(s: & :)sub} )
-      if ! _ymlx_hf_has_token && (( _YMLX_HF_SKIPPED == 0 )); then
-        if ! _ymlx_hf_setup; then
-          _YMLX_HF_SKIPPED=1
+      if ! _marv_mlx_hf_has_token && (( _MARV_MLX_HF_SKIPPED == 0 )); then
+        if ! _marv_mlx_hf_setup; then
+          _MARV_MLX_HF_SKIPPED=1
         fi
       fi
       echo
@@ -887,13 +892,13 @@ export HF_HUB_DISABLE_SHARED_BLOBS=1
         gum style --foreground 42 "✓ Downloaded: $title"
         echo
         if gum confirm "Start ${dl[1]} now?"; then
-          _ymlx_launch "${dl[1]}"
+          _marv_mlx_launch "${dl[1]}"
         fi
       else
         echo
         gum style --foreground 196 "✗ Download failed or cancelled."
       fi
-      _ymlx_pause
+      _marv_mlx_pause
     }
     _D_activate() {
       local r=$(( cursor + 1 ))
@@ -917,8 +922,8 @@ export HF_HUB_DISABLE_SHARED_BLOBS=1
     stty -ixon 2>/dev/null
     _D_render
     while true; do
-      _ymlx_main_read_key
-      local key="$_YMLX_MENU_KEY"
+      _marv_mlx_main_read_key
+      local key="$_MARV_MLX_MENU_KEY"
       if [[ -z "$key" ]]; then
         _D_clear
         return
@@ -941,7 +946,7 @@ export HF_HUB_DISABLE_SHARED_BLOBS=1
     done
   }
 
-  _ymlx_chat_history_menu() {
+  _marv_mlx_chat_history_menu() {
     # Key-driven menu mirroring the main menu. enter = per-chat actions,
     # ^d deletes the highlighted chat, s = search, o = open chat folder,
     # esc/^q = back to main menu.
@@ -1071,7 +1076,7 @@ export HF_HUB_DISABLE_SHARED_BLOBS=1
       else
         echo
       fi
-      _ymlx_pause
+      _marv_mlx_pause
       _H_build; _H_render
     }
 
@@ -1091,7 +1096,7 @@ export HF_HUB_DISABLE_SHARED_BLOBS=1
         else
           echo "Clipboard copy failed (pbcopy unavailable)."
         fi
-        _ymlx_pause
+        _marv_mlx_pause
         _H_render
         return
       fi
@@ -1102,7 +1107,7 @@ export HF_HUB_DISABLE_SHARED_BLOBS=1
       if gum confirm "Open the exported file?"; then
         open "$out" 2>/dev/null
       fi
-      _ymlx_pause
+      _marv_mlx_pause
       _H_render
     }
 
@@ -1129,7 +1134,7 @@ open(f, "w").write("\n".join(out) + "\n")
 PY
         echo "Renamed chat."
       fi
-      _ymlx_pause
+      _marv_mlx_pause
     }
 
     _H_resume() {
@@ -1140,26 +1145,26 @@ PY
       if [[ -z "$model" ]]; then
         _H_clear
         gum style --foreground 196 "Can't determine the model for this chat (missing '# Model:' header)."
-        _ymlx_pause
+        _marv_mlx_pause
         _H_render
         return
       fi
       local port="" pid _p _pt _m
       while IFS=$'\t' read -r _p _pt _m; do
         [[ "$_m" == "$model" ]] && { port="$_pt"; break; }
-      done < <(_ymlx_running)
+      done < <(_marv_mlx_running)
       _H_clear
       if [[ -z "$port" ]]; then
-        gum style --foreground 212 --bold "Continuing chat: $(_ymlx_display_name "$model")"
+        gum style --foreground 212 --bold "Continuing chat: $(_marv_mlx_display_name "$model")"
         echo "The model isn't running — starting it first, then resuming the conversation."
-        if ! _ymlx_launch "$model"; then
-          _ymlx_pause
+        if ! _marv_mlx_launch "$model"; then
+          _marv_mlx_pause
           _H_render
           return
         fi
-        port="$_YMLX_LAST_LAUNCH_PORT"
+        port="$_MARV_MLX_LAST_LAUNCH_PORT"
       fi
-      _ymlx_chat_repl "$model" "$port" "$file"
+      _marv_mlx_chat_repl "$model" "$port" "$file"
       _H_render
     }
 
@@ -1183,7 +1188,7 @@ PY
       done
       if (( ${#results[@]} == 0 )); then
         echo "No matches for: $q"
-        _ymlx_pause
+        _marv_mlx_pause
         _H_render
         return
       fi
@@ -1208,7 +1213,7 @@ PY
         else
           echo
         fi
-        _ymlx_pause
+        _marv_mlx_pause
         _H_build; _H_render
         return
       fi
@@ -1218,7 +1223,7 @@ PY
         return
       fi
       if [[ "$line" == "Open chat folder" ]]; then
-        _H_clear; _ymlx_open_chat_folder; _H_render
+        _H_clear; _marv_mlx_open_chat_folder; _H_render
         return
       fi
       if [[ "$line" == "No chats yet." ]]; then
@@ -1239,7 +1244,7 @@ PY
           else
             echo
           fi
-          _ymlx_pause
+          _marv_mlx_pause
           _H_build; _H_render
           ;;
       esac
@@ -1249,8 +1254,8 @@ PY
     _H_build
     _H_render
     while true; do
-      _ymlx_main_read_key
-      local key="$_YMLX_MENU_KEY"
+      _marv_mlx_main_read_key
+      local key="$_MARV_MLX_MENU_KEY"
       if [[ "$key" == "$_up1" || "$key" == "$_up2" ]]; then
         _H_move -1; _H_render
       elif [[ "$key" == "$_down1" || "$key" == "$_down2" ]]; then
@@ -1266,48 +1271,48 @@ PY
       elif [[ "$key" == "s" || "$key" == "S" || "$key" == "/" ]]; then
         _H_search
       elif [[ "$key" == "o" || "$key" == "O" ]]; then
-        _H_clear; _ymlx_open_chat_folder; _H_render
+        _H_clear; _marv_mlx_open_chat_folder; _H_render
       elif [[ "$key" == $'\x11' || "$key" == $'\e' || -z "$key" ]]; then
         _H_clear
         return
       fi
     done
   }
-  _ymlx_main_build() {
+  _marv_mlx_main_build() {
     local pid port model models m friendly rport think_suffix display first_running_idx=-1 sibfull
-    _YMLX_MENU_LINES=()
-    _YMLX_MENU_KINDS=()
-    _YMLX_MENU_MODELS=()
-    _YMLX_MENU_PORTS=()
-    _YMLX_MENU_ACTIONS=()
-    _YMLX_MENU_PAIRS=()
+    _MARV_MLX_MENU_LINES=()
+    _MARV_MLX_MENU_KINDS=()
+    _MARV_MLX_MENU_MODELS=()
+    _MARV_MLX_MENU_PORTS=()
+    _MARV_MLX_MENU_ACTIONS=()
+    _MARV_MLX_MENU_PAIRS=()
     typeset -A running_for_model
     while IFS=$'\t' read -r pid port model; do
       [[ -z "$pid" ]] && continue
       running_for_model[$model]="$pid"$'\t'"$port"
-    done < <(_ymlx_running)
+    done < <(_marv_mlx_running)
 
-    _YMLX_MENU_NO_MODELS=0
+    _MARV_MLX_MENU_NO_MODELS=0
     models=$(ls "$hub_dir" 2>/dev/null | grep '^models--' | sed 's/models--//' | sed 's/--/\//g')
     if [[ -z "$models" ]]; then
-      _YMLX_MENU_NO_MODELS=1
-      _YMLX_MENU_LINES=( "Download your first model" "──────────────────────" "Chat history" "──────────────────────" "Basic settings" "Advanced settings" "──────────────────────" "Stop & quit" )
-      _YMLX_MENU_KINDS=( "action" "separator" "action" "separator" "action" "action" "separator" "action" )
-      _YMLX_MENU_MODELS=( "" "" "" "" "" "" "" "" )
-      _YMLX_MENU_PORTS=( "" "" "" "" "" "" "" "" )
-      _YMLX_MENU_ACTIONS=( "download" "" "history" "" "basic" "advanced" "" "quit" )
-      if [[ -n "$_YMLX_UPDATE_NEW" ]]; then
-        _YMLX_MENU_LINES=( "Update to latest version" "${_YMLX_MENU_LINES[@]}" )
-        _YMLX_MENU_KINDS=( "action" "${_YMLX_MENU_KINDS[@]}" )
-        _YMLX_MENU_ACTIONS=( "update" "${_YMLX_MENU_ACTIONS[@]}" )
-        _YMLX_MENU_MODELS=( "" "${_YMLX_MENU_MODELS[@]}" )
-        _YMLX_MENU_PORTS=( "" "${_YMLX_MENU_PORTS[@]}" )
+      _MARV_MLX_MENU_NO_MODELS=1
+      _MARV_MLX_MENU_LINES=( "Download your first model" "──────────────────────" "Chat history" "──────────────────────" "Basic settings" "Advanced settings" "──────────────────────" "Stop & quit" )
+      _MARV_MLX_MENU_KINDS=( "action" "separator" "action" "separator" "action" "action" "separator" "action" )
+      _MARV_MLX_MENU_MODELS=( "" "" "" "" "" "" "" "" )
+      _MARV_MLX_MENU_PORTS=( "" "" "" "" "" "" "" "" )
+      _MARV_MLX_MENU_ACTIONS=( "download" "" "history" "" "basic" "advanced" "" "quit" )
+      if [[ -n "$_MARV_MLX_UPDATE_NEW" ]]; then
+        _MARV_MLX_MENU_LINES=( "Update to latest version" "${_MARV_MLX_MENU_LINES[@]}" )
+        _MARV_MLX_MENU_KINDS=( "action" "${_MARV_MLX_MENU_KINDS[@]}" )
+        _MARV_MLX_MENU_ACTIONS=( "update" "${_MARV_MLX_MENU_ACTIONS[@]}" )
+        _MARV_MLX_MENU_MODELS=( "" "${_MARV_MLX_MENU_MODELS[@]}" )
+        _MARV_MLX_MENU_PORTS=( "" "${_MARV_MLX_MENU_PORTS[@]}" )
       fi
     else
       # Append one menu row for a collapsed Ministral Instruct+Reasoning pair.
       # Shows the base name; only one half is active at a time (running variant
       # wins, else the stored default, else Instruct). Never runs both.
-      _ymlx_add_ministral_row() {
+      _marv_mlx_add_ministral_row() {
         local ins="$1" rea="$2" pref="" rp disp base
         local active="$ins"
         if [[ -n "${running_for_model[$rea]}" ]]; then
@@ -1317,27 +1322,27 @@ PY
           pref="$(cat "$state_dir/ministral-default" 2>/dev/null)"
           [[ "$pref" == "$rea" ]] && active="$rea"
         fi
-        base=$(_ymlx_ministral_base "$active")
+        base=$(_marv_mlx_ministral_base "$active")
         if [[ -n "${running_for_model[$active]}" ]]; then
           rport="${running_for_model[$active]##*	}"
           think_suffix=""
-          [[ "$YMLX_QUICK_THINKING" == "on" ]] && think_suffix=" thinking"
-          [[ "$YMLX_QUICK_THINKING" == "off" ]] && think_suffix=" thinking off"
+          [[ "$MARV_MLX_QUICK_THINKING" == "on" ]] && think_suffix=" thinking"
+          [[ "$MARV_MLX_QUICK_THINKING" == "off" ]] && think_suffix=" thinking off"
           display="● $base$think_suffix"
-          _YMLX_MENU_LINES+=( "$display" )
-          _YMLX_MENU_KINDS+=( "model" )
-          _YMLX_MENU_MODELS+=( "$active" )
-          _YMLX_MENU_PORTS+=( "$rport" )
-          _YMLX_MENU_ACTIONS+=( "" )
-          _YMLX_MENU_PAIRS+=( "$ins"$'\t'"$rea" )
-          (( first_running_idx < 0 )) && first_running_idx=$(( ${#_YMLX_MENU_LINES[@]} - 1 ))
+          _MARV_MLX_MENU_LINES+=( "$display" )
+          _MARV_MLX_MENU_KINDS+=( "model" )
+          _MARV_MLX_MENU_MODELS+=( "$active" )
+          _MARV_MLX_MENU_PORTS+=( "$rport" )
+          _MARV_MLX_MENU_ACTIONS+=( "" )
+          _MARV_MLX_MENU_PAIRS+=( "$ins"$'\t'"$rea" )
+          (( first_running_idx < 0 )) && first_running_idx=$(( ${#_MARV_MLX_MENU_LINES[@]} - 1 ))
         else
-          _YMLX_MENU_LINES+=( "$base" )
-          _YMLX_MENU_KINDS+=( "model" )
-          _YMLX_MENU_MODELS+=( "$active" )
-          _YMLX_MENU_PORTS+=( "" )
-          _YMLX_MENU_ACTIONS+=( "" )
-          _YMLX_MENU_PAIRS+=( "$ins"$'\t'"$rea" )
+          _MARV_MLX_MENU_LINES+=( "$base" )
+          _MARV_MLX_MENU_KINDS+=( "model" )
+          _MARV_MLX_MENU_MODELS+=( "$active" )
+          _MARV_MLX_MENU_PORTS+=( "" )
+          _MARV_MLX_MENU_ACTIONS+=( "" )
+          _MARV_MLX_MENU_PAIRS+=( "$ins"$'\t'"$rea" )
         fi
       }
 
@@ -1348,114 +1353,114 @@ PY
       for m in "${downloaded[@]}"; do
         # Collapse a Ministral pair into a single row (handled via Instruct).
         if [[ "${m##*/}" == *-Instruct-* ]]; then
-          sibfull=$(_ymlx_ministral_sibling "$m")
+          sibfull=$(_marv_mlx_ministral_sibling "$m")
           if [[ -n "${dlset[$sibfull]}" ]]; then
             handled[$sibfull]=1
-            _ymlx_add_ministral_row "$m" "$sibfull"
+            _marv_mlx_add_ministral_row "$m" "$sibfull"
             continue
           fi
         fi
         [[ -n "${handled[$m]}" ]] && continue
-        friendly=$(_ymlx_display_name "$m")
+        friendly=$(_marv_mlx_display_name "$m")
         if [[ -n "${running_for_model[$m]}" ]]; then
           rport="${running_for_model[$m]##*	}"
           think_suffix=""
-          [[ "$YMLX_QUICK_THINKING" == "on" ]] && think_suffix=" thinking"
-          [[ "$YMLX_QUICK_THINKING" == "off" ]] && think_suffix=" thinking off"
+          [[ "$MARV_MLX_QUICK_THINKING" == "on" ]] && think_suffix=" thinking"
+          [[ "$MARV_MLX_QUICK_THINKING" == "off" ]] && think_suffix=" thinking off"
           display="● $friendly$think_suffix"
-          _YMLX_MENU_LINES+=( "$display" )
-          _YMLX_MENU_KINDS+=( "model" )
-          _YMLX_MENU_MODELS+=( "$m" )
-          _YMLX_MENU_PORTS+=( "$rport" )
-          _YMLX_MENU_ACTIONS+=( "" )
-          _YMLX_MENU_PAIRS+=( "" )
-          (( first_running_idx < 0 )) && first_running_idx=$(( ${#_YMLX_MENU_LINES[@]} - 1 ))
+          _MARV_MLX_MENU_LINES+=( "$display" )
+          _MARV_MLX_MENU_KINDS+=( "model" )
+          _MARV_MLX_MENU_MODELS+=( "$m" )
+          _MARV_MLX_MENU_PORTS+=( "$rport" )
+          _MARV_MLX_MENU_ACTIONS+=( "" )
+          _MARV_MLX_MENU_PAIRS+=( "" )
+          (( first_running_idx < 0 )) && first_running_idx=$(( ${#_MARV_MLX_MENU_LINES[@]} - 1 ))
         else
-          _YMLX_MENU_LINES+=( "$friendly" )
-          _YMLX_MENU_KINDS+=( "model" )
-          _YMLX_MENU_MODELS+=( "$m" )
-          _YMLX_MENU_PORTS+=( "" )
-          _YMLX_MENU_ACTIONS+=( "" )
-          _YMLX_MENU_PAIRS+=( "" )
+          _MARV_MLX_MENU_LINES+=( "$friendly" )
+          _MARV_MLX_MENU_KINDS+=( "model" )
+          _MARV_MLX_MENU_MODELS+=( "$m" )
+          _MARV_MLX_MENU_PORTS+=( "" )
+          _MARV_MLX_MENU_ACTIONS+=( "" )
+          _MARV_MLX_MENU_PAIRS+=( "" )
         fi
       done
-      _YMLX_MENU_LINES+=( "──────────────────────" )
-      _YMLX_MENU_KINDS+=( "separator" )
-      _YMLX_MENU_MODELS+=( "" ); _YMLX_MENU_PORTS+=( "" ); _YMLX_MENU_ACTIONS+=( "" )
-      if [[ -n "$_YMLX_UPDATE_NEW" ]]; then
-        _YMLX_MENU_LINES+=( "Update to latest version" )
-        _YMLX_MENU_KINDS+=( "action" )
-        _YMLX_MENU_MODELS+=( "" ); _YMLX_MENU_PORTS+=( "" ); _YMLX_MENU_ACTIONS+=( "update" )
+      _MARV_MLX_MENU_LINES+=( "──────────────────────" )
+      _MARV_MLX_MENU_KINDS+=( "separator" )
+      _MARV_MLX_MENU_MODELS+=( "" ); _MARV_MLX_MENU_PORTS+=( "" ); _MARV_MLX_MENU_ACTIONS+=( "" )
+      if [[ -n "$_MARV_MLX_UPDATE_NEW" ]]; then
+        _MARV_MLX_MENU_LINES+=( "Update to latest version" )
+        _MARV_MLX_MENU_KINDS+=( "action" )
+        _MARV_MLX_MENU_MODELS+=( "" ); _MARV_MLX_MENU_PORTS+=( "" ); _MARV_MLX_MENU_ACTIONS+=( "update" )
       fi
       # Chat history group
-      _YMLX_MENU_LINES+=( "Chat history" )
-      _YMLX_MENU_KINDS+=( "action" )
-      _YMLX_MENU_MODELS+=( "" ); _YMLX_MENU_PORTS+=( "" ); _YMLX_MENU_ACTIONS+=( "history" )
+      _MARV_MLX_MENU_LINES+=( "Chat history" )
+      _MARV_MLX_MENU_KINDS+=( "action" )
+      _MARV_MLX_MENU_MODELS+=( "" ); _MARV_MLX_MENU_PORTS+=( "" ); _MARV_MLX_MENU_ACTIONS+=( "history" )
 
       # Settings group
-      _YMLX_MENU_LINES+=( "──────────────────────" )
-      _YMLX_MENU_KINDS+=( "separator" )
-      _YMLX_MENU_MODELS+=( "" ); _YMLX_MENU_PORTS+=( "" ); _YMLX_MENU_ACTIONS+=( "" )
-      _YMLX_MENU_LINES+=( "Basic settings" "Advanced settings" "Download new model" )
-      _YMLX_MENU_KINDS+=( "action" "action" "action" )
-      _YMLX_MENU_MODELS+=( "" "" "" ); _YMLX_MENU_PORTS+=( "" "" "" )
-      _YMLX_MENU_ACTIONS+=( "basic" "advanced" "download" )
+      _MARV_MLX_MENU_LINES+=( "──────────────────────" )
+      _MARV_MLX_MENU_KINDS+=( "separator" )
+      _MARV_MLX_MENU_MODELS+=( "" ); _MARV_MLX_MENU_PORTS+=( "" ); _MARV_MLX_MENU_ACTIONS+=( "" )
+      _MARV_MLX_MENU_LINES+=( "Basic settings" "Advanced settings" "Download new model" )
+      _MARV_MLX_MENU_KINDS+=( "action" "action" "action" )
+      _MARV_MLX_MENU_MODELS+=( "" "" "" ); _MARV_MLX_MENU_PORTS+=( "" "" "" )
+      _MARV_MLX_MENU_ACTIONS+=( "basic" "advanced" "download" )
 
       # Lifecycle group
-      _YMLX_MENU_LINES+=( "──────────────────────" )
-      _YMLX_MENU_KINDS+=( "separator" )
-      _YMLX_MENU_MODELS+=( "" ); _YMLX_MENU_PORTS+=( "" ); _YMLX_MENU_ACTIONS+=( "" )
-      _YMLX_MENU_LINES+=( "Restart & refresh" "Stop & quit" )
-      _YMLX_MENU_KINDS+=( "action" "action" )
-      _YMLX_MENU_MODELS+=( "" "" ); _YMLX_MENU_PORTS+=( "" "" )
-      _YMLX_MENU_ACTIONS+=( "restart" "quit" )
+      _MARV_MLX_MENU_LINES+=( "──────────────────────" )
+      _MARV_MLX_MENU_KINDS+=( "separator" )
+      _MARV_MLX_MENU_MODELS+=( "" ); _MARV_MLX_MENU_PORTS+=( "" ); _MARV_MLX_MENU_ACTIONS+=( "" )
+      _MARV_MLX_MENU_LINES+=( "Restart & refresh" "Stop & quit" )
+      _MARV_MLX_MENU_KINDS+=( "action" "action" )
+      _MARV_MLX_MENU_MODELS+=( "" "" ); _MARV_MLX_MENU_PORTS+=( "" "" )
+      _MARV_MLX_MENU_ACTIONS+=( "restart" "quit" )
     fi
-    _YMLX_MENU_SCROLL=0
+    _MARV_MLX_MENU_SCROLL=0
     if (( first_running_idx >= 0 )); then
-      _YMLX_MENU_CURSOR=$first_running_idx
+      _MARV_MLX_MENU_CURSOR=$first_running_idx
     else
-      _YMLX_MENU_CURSOR=0
+      _MARV_MLX_MENU_CURSOR=0
     fi
-    _ymlx_main_scroll_cursor
+    _marv_mlx_main_scroll_cursor
   }
 
-  _ymlx_main_render() {
+  _marv_mlx_main_render() {
     local i idx line prefix kind n end footer has_running=0
     # The menu repaints by moving the cursor up and clearing; without hiding it
     # the terminal's blinking cursor would park on the empty line under the
-    # footer (the "flashing square"). _ymlx_main_clear restores it before any
+    # footer (the "flashing square"). _marv_mlx_main_clear restores it before any
     # sub-screen (gum dialogs, the chat REPL) so those keep a visible cursor.
     print -n -- $'\e[?25l'
-    if (( _YMLX_MENU_DRAWN )); then
-      print -n -- "\033[${_YMLX_MENU_NLINES}A\033[J"
+    if (( _MARV_MLX_MENU_DRAWN )); then
+      print -n -- "\033[${_MARV_MLX_MENU_NLINES}A\033[J"
     fi
     local -a out=()
-    if (( _YMLX_MENU_NO_MODELS )); then
+    if (( _MARV_MLX_MENU_NO_MODELS )); then
       out+=( $'\e[1;35mNo models installed yet.\e[0m' )
     else
       out+=( $'\e[1;35mSelect model and run:\e[0m' )
     fi
-    n=${#_YMLX_MENU_LINES[@]}
-    end=$(( _YMLX_MENU_SCROLL + _YMLX_MENU_VIS ))
+    n=${#_MARV_MLX_MENU_LINES[@]}
+    end=$(( _MARV_MLX_MENU_SCROLL + _MARV_MLX_MENU_VIS ))
     (( end > n )) && end=n
-    for (( i=_YMLX_MENU_SCROLL; i<end; i++ )); do
+    for (( i=_MARV_MLX_MENU_SCROLL; i<end; i++ )); do
       idx=$i
-      line="${_YMLX_MENU_LINES[$((idx+1))]}"
-      kind="${_YMLX_MENU_KINDS[$((idx+1))]}"
+      line="${_MARV_MLX_MENU_LINES[$((idx+1))]}"
+      kind="${_MARV_MLX_MENU_KINDS[$((idx+1))]}"
       prefix="  "
-      if (( idx == _YMLX_MENU_CURSOR )); then
+      if (( idx == _MARV_MLX_MENU_CURSOR )); then
         prefix="> "
       fi
       if [[ "$kind" == "separator" ]]; then
         out+=( $'\e[2m'"$line"$'\e[0m' )
-      elif (( idx == _YMLX_MENU_CURSOR )); then
+      elif (( idx == _MARV_MLX_MENU_CURSOR )); then
         out+=( $'\e[1;36m'"$prefix$line"$'\e[0m' )
       else
         out+=( "$prefix$line" )
       fi
     done
-    for (( i=1; i<=${#_YMLX_MENU_PORTS[@]}; i++ )); do
-      [[ -n "${_YMLX_MENU_PORTS[$i]}" ]] && { has_running=1; break; }
+    for (( i=1; i<=${#_MARV_MLX_MENU_PORTS[@]}; i++ )); do
+      [[ -n "${_MARV_MLX_MENU_PORTS[$i]}" ]] && { has_running=1; break; }
     done
     local footer_text
     if (( has_running )); then
@@ -1463,187 +1468,187 @@ PY
     else
       footer_text="↓↑ navigate • enter submit/start • ^d delete • ^q quit"
     fi
-    footer_text="${footer_text:0:$(( _YMLX_MENU_WIDTH - 1 ))}"
+    footer_text="${footer_text:0:$(( _MARV_MLX_MENU_WIDTH - 1 ))}"
     out+=( $'\e[2m'"$footer_text"$'\e[0m' )
-    _YMLX_MENU_NLINES=0
+    _MARV_MLX_MENU_NLINES=0
     for line in "${out[@]}"; do
       print -n -- "$line\033[K\n"
-      (( _YMLX_MENU_NLINES++ ))
+      (( _MARV_MLX_MENU_NLINES++ ))
     done
-    _YMLX_MENU_DRAWN=1
+    _MARV_MLX_MENU_DRAWN=1
   }
 
-  _ymlx_main_clear() {
-    if (( _YMLX_MENU_DRAWN )); then
-      print -n -- "\033[${_YMLX_MENU_NLINES}A\033[J"
-      _YMLX_MENU_DRAWN=0
+  _marv_mlx_main_clear() {
+    if (( _MARV_MLX_MENU_DRAWN )); then
+      print -n -- "\033[${_MARV_MLX_MENU_NLINES}A\033[J"
+      _MARV_MLX_MENU_DRAWN=0
     fi
     # Always give the cursor back, even if nothing was drawn (it may have been
     # hidden by a render that was then cleared off-screen).
     print -n -- $'\e[?25h'
   }
 
-  _ymlx_main_header() {
-    gum style --foreground 212 --bold "▌▌ YMLX"
+  _marv_mlx_main_header() {
+    gum style --foreground 212 --bold "▌▌ marv-mlx"
     gum style --foreground 244 "Runs an MLX model behind an OpenAI-compatible REST API at localhost:11500"
-    if [[ -n "$_YMLX_UPDATE_NEW" && -n "$_YMLX_UPDATE_INSTALLED" ]]; then
-      gum style --foreground 226 --bold "▲ Update available: $_YMLX_UPDATE_INSTALLED → $_YMLX_UPDATE_NEW"
+    if [[ -n "$_MARV_MLX_UPDATE_NEW" && -n "$_MARV_MLX_UPDATE_INSTALLED" ]]; then
+      gum style --foreground 226 --bold "▲ Update available: $_MARV_MLX_UPDATE_INSTALLED → $_MARV_MLX_UPDATE_NEW"
     fi
   }
 
-  _ymlx_main_full_render() {
+  _marv_mlx_main_full_render() {
     print -n -- "\033[2J\033[H"
-    _YMLX_MENU_DRAWN=0
+    _MARV_MLX_MENU_DRAWN=0
     echo
-    _ymlx_main_header
-    _ymlx_main_render
+    _marv_mlx_main_header
+    _marv_mlx_main_render
   }
 
-  _ymlx_main_scroll_cursor() {
-    local n=${#_YMLX_MENU_LINES[@]} max_scroll=$(( n - _YMLX_MENU_VIS ))
+  _marv_mlx_main_scroll_cursor() {
+    local n=${#_MARV_MLX_MENU_LINES[@]} max_scroll=$(( n - _MARV_MLX_MENU_VIS ))
     (( max_scroll < 0 )) && max_scroll=0
-    (( _YMLX_MENU_SCROLL > max_scroll )) && _YMLX_MENU_SCROLL=$max_scroll
-    if (( _YMLX_MENU_CURSOR < _YMLX_MENU_SCROLL )); then
-      _YMLX_MENU_SCROLL=$_YMLX_MENU_CURSOR
-    elif (( _YMLX_MENU_CURSOR >= _YMLX_MENU_SCROLL + _YMLX_MENU_VIS )); then
-      _YMLX_MENU_SCROLL=$(( _YMLX_MENU_CURSOR - _YMLX_MENU_VIS + 1 ))
+    (( _MARV_MLX_MENU_SCROLL > max_scroll )) && _MARV_MLX_MENU_SCROLL=$max_scroll
+    if (( _MARV_MLX_MENU_CURSOR < _MARV_MLX_MENU_SCROLL )); then
+      _MARV_MLX_MENU_SCROLL=$_MARV_MLX_MENU_CURSOR
+    elif (( _MARV_MLX_MENU_CURSOR >= _MARV_MLX_MENU_SCROLL + _MARV_MLX_MENU_VIS )); then
+      _MARV_MLX_MENU_SCROLL=$(( _MARV_MLX_MENU_CURSOR - _MARV_MLX_MENU_VIS + 1 ))
     fi
-    (( _YMLX_MENU_SCROLL < 0 )) && _YMLX_MENU_SCROLL=0
+    (( _MARV_MLX_MENU_SCROLL < 0 )) && _MARV_MLX_MENU_SCROLL=0
   }
 
-  _ymlx_main_move() {
-    local delta="$1" n=${#_YMLX_MENU_LINES[@]} new=$_YMLX_MENU_CURSOR guard=$_YMLX_MENU_CURSOR
+  _marv_mlx_main_move() {
+    local delta="$1" n=${#_MARV_MLX_MENU_LINES[@]} new=$_MARV_MLX_MENU_CURSOR guard=$_MARV_MLX_MENU_CURSOR
     while true; do
       new=$(( new + delta ))
       if (( new < 0 )); then new=$(( n - 1 )); fi
       if (( new >= n )); then new=0; fi
-      if [[ "${_YMLX_MENU_KINDS[$((new+1))]}" != "separator" ]]; then
-        _YMLX_MENU_CURSOR=$new
+      if [[ "${_MARV_MLX_MENU_KINDS[$((new+1))]}" != "separator" ]]; then
+        _MARV_MLX_MENU_CURSOR=$new
         break
       fi
       if (( new == guard )); then break; fi
     done
-    _ymlx_main_scroll_cursor
+    _marv_mlx_main_scroll_cursor
   }
 
-  _ymlx_main_rebuild_preserving() {
-    local kind="${_YMLX_MENU_KINDS[$((_YMLX_MENU_CURSOR+1))]}"
-    local model="${_YMLX_MENU_MODELS[$((_YMLX_MENU_CURSOR+1))]}"
-    local action="${_YMLX_MENU_ACTIONS[$((_YMLX_MENU_CURSOR+1))]}"
-    _ymlx_main_build
+  _marv_mlx_main_rebuild_preserving() {
+    local kind="${_MARV_MLX_MENU_KINDS[$((_MARV_MLX_MENU_CURSOR+1))]}"
+    local model="${_MARV_MLX_MENU_MODELS[$((_MARV_MLX_MENU_CURSOR+1))]}"
+    local action="${_MARV_MLX_MENU_ACTIONS[$((_MARV_MLX_MENU_CURSOR+1))]}"
+    _marv_mlx_main_build
     local i
-    for (( i=1; i<=${#_YMLX_MENU_KINDS[@]}; i++ )); do
-      if [[ "${_YMLX_MENU_KINDS[$i]}" == "$kind" && "${_YMLX_MENU_MODELS[$i]}" == "$model" && "${_YMLX_MENU_ACTIONS[$i]}" == "$action" ]]; then
-        _YMLX_MENU_CURSOR=$(( i - 1 ))
+    for (( i=1; i<=${#_MARV_MLX_MENU_KINDS[@]}; i++ )); do
+      if [[ "${_MARV_MLX_MENU_KINDS[$i]}" == "$kind" && "${_MARV_MLX_MENU_MODELS[$i]}" == "$model" && "${_MARV_MLX_MENU_ACTIONS[$i]}" == "$action" ]]; then
+        _MARV_MLX_MENU_CURSOR=$(( i - 1 ))
         break
       fi
     done
-    _ymlx_main_scroll_cursor
-    _ymlx_main_render
+    _marv_mlx_main_scroll_cursor
+    _marv_mlx_main_render
   }
 
-  _ymlx_main_rebuild_full() {
-    local kind="${_YMLX_MENU_KINDS[$((_YMLX_MENU_CURSOR+1))]}"
-    local model="${_YMLX_MENU_MODELS[$((_YMLX_MENU_CURSOR+1))]}"
-    local action="${_YMLX_MENU_ACTIONS[$((_YMLX_MENU_CURSOR+1))]}"
-    _ymlx_main_build
+  _marv_mlx_main_rebuild_full() {
+    local kind="${_MARV_MLX_MENU_KINDS[$((_MARV_MLX_MENU_CURSOR+1))]}"
+    local model="${_MARV_MLX_MENU_MODELS[$((_MARV_MLX_MENU_CURSOR+1))]}"
+    local action="${_MARV_MLX_MENU_ACTIONS[$((_MARV_MLX_MENU_CURSOR+1))]}"
+    _marv_mlx_main_build
     local i
-    for (( i=1; i<=${#_YMLX_MENU_KINDS[@]}; i++ )); do
-      if [[ "${_YMLX_MENU_KINDS[$i]}" == "$kind" && "${_YMLX_MENU_MODELS[$i]}" == "$model" && "${_YMLX_MENU_ACTIONS[$i]}" == "$action" ]]; then
-        _YMLX_MENU_CURSOR=$(( i - 1 ))
+    for (( i=1; i<=${#_MARV_MLX_MENU_KINDS[@]}; i++ )); do
+      if [[ "${_MARV_MLX_MENU_KINDS[$i]}" == "$kind" && "${_MARV_MLX_MENU_MODELS[$i]}" == "$model" && "${_MARV_MLX_MENU_ACTIONS[$i]}" == "$action" ]]; then
+        _MARV_MLX_MENU_CURSOR=$(( i - 1 ))
         break
       fi
     done
-    _ymlx_main_scroll_cursor
-    _ymlx_main_full_render
+    _marv_mlx_main_scroll_cursor
+    _marv_mlx_main_full_render
   }
 
-  _ymlx_main_toggle_thinking() {
-    local idx=$(( _YMLX_MENU_CURSOR + 1 ))
-    local kind="${_YMLX_MENU_KINDS[$idx]}"
+  _marv_mlx_main_toggle_thinking() {
+    local idx=$(( _MARV_MLX_MENU_CURSOR + 1 ))
+    local kind="${_MARV_MLX_MENU_KINDS[$idx]}"
     [[ "$kind" != "model" ]] && return
-    local pair="${_YMLX_MENU_PAIRS[$idx]}"
+    local pair="${_MARV_MLX_MENU_PAIRS[$idx]}"
     if [[ -n "$pair" ]]; then
       # Ministral: swap between the Instruct and Reasoning halves. Never run
       # both at once — stop whichever is up and launch the other, or just flip
       # the stored default when neither is running.
       local ins="${pair%%$'\t'*}" rea="${pair##*$'\t'}"
-      local cur="${_YMLX_MENU_MODELS[$idx]}"
+      local cur="${_MARV_MLX_MENU_MODELS[$idx]}"
       local other="$ins"; [[ "$cur" == "$ins" ]] && other="$rea"
-      local pair_port="${_YMLX_MENU_PORTS[$idx]}"
+      local pair_port="${_MARV_MLX_MENU_PORTS[$idx]}"
       local up="" pid port model
       while IFS=$'\t' read -r pid port model; do
-        [[ -n "$pid" && ( "$model" == "$ins" || "$model" == "$rea" ) ]] && { up=1; pair_port="$port"; kill "$pid" 2>/dev/null; _ymlx_drop "$pid"; }
-      done < <(_ymlx_running)
+        [[ -n "$pid" && ( "$model" == "$ins" || "$model" == "$rea" ) ]] && { up=1; pair_port="$port"; kill "$pid" 2>/dev/null; _marv_mlx_drop "$pid"; }
+      done < <(_marv_mlx_running)
       print -r -- "$other" > "$state_dir/ministral-default"
-      _ymlx_main_clear
+      _marv_mlx_main_clear
       if [[ -n "$up" ]]; then
         local i
         for i in {1..40}; do
-          _ymlx_port_free "$pair_port" && break
+          _marv_mlx_port_free "$pair_port" && break
           sleep 0.2
         done
-        echo "Switching to $(_ymlx_ministral_base "$other")…"
-        _ymlx_launch "$other" "$pair_port"
+        echo "Switching to $(_marv_mlx_ministral_base "$other")…"
+        _marv_mlx_launch "$other" "$pair_port"
       else
-        echo "Ministral: next start uses $(_ymlx_ministral_base "$other")."
+        echo "Ministral: next start uses $(_marv_mlx_ministral_base "$other")."
       fi
-      _ymlx_pause
-      _ymlx_main_rebuild_preserving
+      _marv_mlx_pause
+      _marv_mlx_main_rebuild_preserving
       return
     fi
-    if [[ "$YMLX_QUICK_THINKING" == "on" ]]; then
-      YMLX_QUICK_THINKING="off"
+    if [[ "$MARV_MLX_QUICK_THINKING" == "on" ]]; then
+      MARV_MLX_QUICK_THINKING="off"
     else
-      YMLX_QUICK_THINKING="on"
+      MARV_MLX_QUICK_THINKING="on"
     fi
-    _ymlx_write_managed_block "$config_file"
-    _ymlx_reload_config
-    _ymlx_main_rebuild_preserving
+    _marv_mlx_write_managed_block "$config_file"
+    _marv_mlx_reload_config
+    _marv_mlx_main_rebuild_preserving
   }
 
-  _ymlx_main_stop() {
-    local idx=$(( _YMLX_MENU_CURSOR + 1 ))
-    local kind="${_YMLX_MENU_KINDS[$idx]}"
-    local port="${_YMLX_MENU_PORTS[$idx]}"
-    local model="${_YMLX_MENU_MODELS[$idx]}"
+  _marv_mlx_main_stop() {
+    local idx=$(( _MARV_MLX_MENU_CURSOR + 1 ))
+    local kind="${_MARV_MLX_MENU_KINDS[$idx]}"
+    local port="${_MARV_MLX_MENU_PORTS[$idx]}"
+    local model="${_MARV_MLX_MENU_MODELS[$idx]}"
     if [[ "$kind" != "model" || -z "$port" ]]; then
       return
     fi
-    _ymlx_main_clear
+    _marv_mlx_main_clear
     local pid _p _pt _m
     while IFS=$'\t' read -r _p _pt _m; do
       if [[ "$_m" == "$model" && "$_pt" == "$port" ]]; then
         pid="$_p"
         break
       fi
-    done < <(_ymlx_running)
+    done < <(_marv_mlx_running)
     if [[ -n "$pid" ]]; then
       kill "$pid" 2>/dev/null && echo "Stopped: $model on :$port"
-      _ymlx_drop "$pid"
+      _marv_mlx_drop "$pid"
     else
       echo "Server for $model was already gone."
     fi
-    _ymlx_pause
-    _ymlx_main_rebuild_full
+    _marv_mlx_pause
+    _marv_mlx_main_rebuild_full
   }
 
-  _ymlx_main_delete() {
-    local idx=$(( _YMLX_MENU_CURSOR + 1 ))
-    local kind="${_YMLX_MENU_KINDS[$idx]}"
-    local model="${_YMLX_MENU_MODELS[$idx]}"
-    local port="${_YMLX_MENU_PORTS[$idx]}"
+  _marv_mlx_main_delete() {
+    local idx=$(( _MARV_MLX_MENU_CURSOR + 1 ))
+    local kind="${_MARV_MLX_MENU_KINDS[$idx]}"
+    local model="${_MARV_MLX_MENU_MODELS[$idx]}"
+    local port="${_MARV_MLX_MENU_PORTS[$idx]}"
     if [[ "$kind" != "model" ]]; then
       return
     fi
     # A Ministral pair should be removed as a whole (both halves).
-    local pair="${_YMLX_MENU_PAIRS[$idx]}"
+    local pair="${_MARV_MLX_MENU_PAIRS[$idx]}"
     local -a del=( "$model" )
     if [[ -n "$pair" ]]; then
       local ins="${pair%%$'\t'*}" rea="${pair##*$'\t'}"
       del=( "$ins" "$rea" )
     fi
-    _ymlx_main_clear
+    _marv_mlx_main_clear
     local m folder pathdel=()
     for m in "${del[@]}"; do
       pathdel+=( "$hub_dir/models--${m//\//--}" )
@@ -1654,7 +1659,7 @@ PY
     done
     if (( missing )); then
       echo "Folder not found."
-      _ymlx_pause
+      _marv_mlx_pause
     else
       local warn="" name="${del[1]}"
       [[ -n "$pair" ]] && name="${del[1]} + ${del[2]}"
@@ -1667,9 +1672,9 @@ PY
             [[ "$_mm" == "$m" ]] && { skip=1; break; }
           done
           if [[ -n "$_p" && -n "$skip" ]]; then
-            kill "$_p" 2>/dev/null && _ymlx_drop "$_p"
+            kill "$_p" 2>/dev/null && _marv_mlx_drop "$_p"
           fi
-        done < <(_ymlx_running)
+        done < <(_marv_mlx_running)
         for folder in "${pathdel[@]}"; do
           rm -rf "$folder"
         done
@@ -1678,48 +1683,48 @@ PY
         # The model folders above only held symlinks; the real weights live in
         # the shared hub/blobs/ store. Sweep it so blobs orphaned by this
         # removal (no longer referenced by any cached model) free their space.
-        _ymlx_purge_orphan_blobs "$hub_dir"
-        _ymlx_pause
+        _marv_mlx_purge_orphan_blobs "$hub_dir"
+        _marv_mlx_pause
       fi
     fi
-    _ymlx_main_rebuild_full
+    _marv_mlx_main_rebuild_full
   }
 
-  # "Update to latest version" from the menu — adapts to how ymlx was installed:
+  # "Update to latest version" from the menu — adapts to how marv-mlx was installed:
   # a git clone pulls + re-runs install.sh; a pi-managed package tells the user
-  # to use `pi update`; anything else (e.g. the stable copy from /ymlx-setup) asks
+  # to use `pi update`; anything else (e.g. the stable copy from /marv-mlx-setup) asks
   # for a re-install. Re-checks afterwards so the banner clears once current.
-  _ymlx_do_update() {
-    _ymlx_main_clear
-    gum style --foreground 212 --bold "Updating ymlx"
-    if [[ -d "$_YMLX_SRC_DIR/.git" ]]; then
-      echo "Pulling latest from git ($_YMLX_SRC_DIR):"
-      if git -C "$_YMLX_SRC_DIR" pull --ff-only; then
-        sh "$_YMLX_SRC_DIR/install.sh"
+  _marv_mlx_do_update() {
+    _marv_mlx_main_clear
+    gum style --foreground 212 --bold "Updating marv-mlx"
+    if [[ -d "$_MARV_MLX_SRC_DIR/.git" ]]; then
+      echo "Pulling latest from git ($_MARV_MLX_SRC_DIR):"
+      if git -C "$_MARV_MLX_SRC_DIR" pull --ff-only; then
+        sh "$_MARV_MLX_SRC_DIR/install.sh"
         echo
-        gum style --foreground 82 --bold "ymlx updated — quit and re-run ymlx to use the new version."
-        _ymlx_check_update
+        gum style --foreground 82 --bold "marv-mlx updated — quit and re-run marv-mlx to use the new version."
+        _marv_mlx_check_update
       else
-        echo "git pull had problems — resolve conflicts in $_YMLX_SRC_DIR, then retry."
+        echo "git pull had problems — resolve conflicts in $_MARV_MLX_SRC_DIR, then retry."
       fi
-    elif [[ "$_YMLX_SRC_DIR" == "$HOME"/.pi/agent/git/* ]]; then
+    elif [[ "$_MARV_MLX_SRC_DIR" == "$HOME"/.pi/agent/git/* ]]; then
       echo "This install is managed by pi (a pi package). Update it from a terminal:"
       echo "  pi update --extensions"
-      echo "then restart ymlx."
+      echo "then restart marv-mlx."
     else
       # Managed copy (installed via curl/install.sh, no .git). Fetch the
-      # latest install.sh and re-run it with YMLX_FORCE=1 + YMLX_REF=main so it
+      # latest install.sh and re-run it with MARV_MLX_FORCE=1 + MARV_MLX_REF=main so it
       # re-downloads the newest source — a plain re-run of the copy's own
       # install.sh wouldn't refresh it (and an old one won't know the flag).
       echo "Refreshing managed copy from GitHub…"
       local up_sh="$state_dir/install-update.sh"
       if curl -fsSL --connect-timeout 3 --max-time 20 \
-           "https://raw.githubusercontent.com/pavsefcik/ymlx/main/install.sh" \
+           "https://raw.githubusercontent.com/pavsefcik/marv-mlx/main/install.sh" \
            -o "$up_sh" 2>/dev/null; then
-        if YMLX_FORCE=1 YMLX_REF=main sh "$up_sh"; then
+        if MARV_MLX_FORCE=1 MARV_MLX_REF=main sh "$up_sh"; then
           echo
-          gum style --foreground 82 --bold "ymlx updated — restart ymlx to use the new version."
-          _ymlx_check_update
+          gum style --foreground 82 --bold "marv-mlx updated — restart marv-mlx to use the new version."
+          _marv_mlx_check_update
         else
           echo "Update failed — check the install output above, then retry."
         fi
@@ -1727,140 +1732,140 @@ PY
         echo "Couldn't download the latest install.sh (offline?) — update aborted."
       fi
     fi
-    _ymlx_pause
-    _ymlx_main_rebuild_full
+    _marv_mlx_pause
+    _marv_mlx_main_rebuild_full
   }
 
-  _ymlx_main_quit() {
-    _ymlx_main_clear
-    if gum confirm "Quit ymlx and stop all running models?"; then
-      _ymlx_stop_all >/dev/null 2>&1
-      _YMLX_MENU_QUIT=1
+  _marv_mlx_main_quit() {
+    _marv_mlx_main_clear
+    if gum confirm "Quit marv-mlx and stop all running models?"; then
+      _marv_mlx_stop_all >/dev/null 2>&1
+      _MARV_MLX_MENU_QUIT=1
       return 0
     fi
-    _ymlx_main_full_render
+    _marv_mlx_main_full_render
     return 1
   }
 
-  _ymlx_main_activate() {
-    local idx=$(( _YMLX_MENU_CURSOR + 1 ))
-    local kind="${_YMLX_MENU_KINDS[$idx]}"
-    local model="${_YMLX_MENU_MODELS[$idx]}"
-    local port="${_YMLX_MENU_PORTS[$idx]}"
-    local action="${_YMLX_MENU_ACTIONS[$idx]}"
+  _marv_mlx_main_activate() {
+    local idx=$(( _MARV_MLX_MENU_CURSOR + 1 ))
+    local kind="${_MARV_MLX_MENU_KINDS[$idx]}"
+    local model="${_MARV_MLX_MENU_MODELS[$idx]}"
+    local port="${_MARV_MLX_MENU_PORTS[$idx]}"
+    local action="${_MARV_MLX_MENU_ACTIONS[$idx]}"
     [[ "$kind" == "separator" ]] && return
-    _ymlx_main_clear
+    _marv_mlx_main_clear
     if [[ "$kind" == "model" ]]; then
       if [[ -n "$port" ]]; then
         # Already running — just chat with it.
-        _ymlx_chat_repl "$model" "$port"
-      elif [[ -n "$(_ymlx_running)" ]]; then
+        _marv_mlx_chat_repl "$model" "$port"
+      elif [[ -n "$(_marv_mlx_running)" ]]; then
         # A different model is running: swap, run alongside, or cancel.
         local choice
         choice=$(printf 'Yes\nNo\nRun in parallel' | gum choose --header "Do you want to swap models? (a model is already running)" --height 6)
         case "$choice" in
           "Yes")
             # Swap: stop everything, then run the selected model on :11500.
-            _ymlx_stop_all >/dev/null 2>&1
+            _marv_mlx_stop_all >/dev/null 2>&1
             local i
             for i in {1..40}; do
-              _ymlx_port_free 11500 && break
+              _marv_mlx_port_free 11500 && break
               sleep 0.2
             done
-            if _ymlx_launch "$model"; then
-              _ymlx_chat_repl "$model" "$_YMLX_LAST_LAUNCH_PORT"
+            if _marv_mlx_launch "$model"; then
+              _marv_mlx_chat_repl "$model" "$_MARV_MLX_LAST_LAUNCH_PORT"
             fi
             ;;
           "Run in parallel")
-            if _ymlx_launch "$model"; then
-              _ymlx_chat_repl "$model" "$_YMLX_LAST_LAUNCH_PORT"
+            if _marv_mlx_launch "$model"; then
+              _marv_mlx_chat_repl "$model" "$_MARV_MLX_LAST_LAUNCH_PORT"
             fi
             ;;
           *) : ;;   # No / esc — back to the menu
         esac
       else
-        if _ymlx_launch "$model"; then
-          _ymlx_chat_repl "$model" "$_YMLX_LAST_LAUNCH_PORT"
+        if _marv_mlx_launch "$model"; then
+          _marv_mlx_chat_repl "$model" "$_MARV_MLX_LAST_LAUNCH_PORT"
         fi
       fi
     else
       case "$action" in
-        update) _ymlx_do_update ;;
-        download) _ymlx_download_menu ;;
-        history) _ymlx_chat_history_menu ;;
-        basic) _ymlx_basic_settings_menu ;;
-        advanced) _ymlx_advanced_settings_menu ;;
-        restart) _ymlx_main_restart ;;
-        quit) _ymlx_main_quit ;;
+        update) _marv_mlx_do_update ;;
+        download) _marv_mlx_download_menu ;;
+        history) _marv_mlx_chat_history_menu ;;
+        basic) _marv_mlx_basic_settings_menu ;;
+        advanced) _marv_mlx_advanced_settings_menu ;;
+        restart) _marv_mlx_main_restart ;;
+        quit) _marv_mlx_main_quit ;;
       esac
     fi
-    (( _YMLX_MENU_QUIT )) && return
-    _ymlx_main_rebuild_full
+    (( _MARV_MLX_MENU_QUIT )) && return
+    _marv_mlx_main_rebuild_full
   }
 
-  _ymlx_main_read_key() {
+  _marv_mlx_main_read_key() {
     local k1 k2 k3
     read -s -k1 k1
     local st=$?
     if (( st != 0 )); then
-      _YMLX_MENU_KEY=""
+      _MARV_MLX_MENU_KEY=""
       return
     fi
     if [[ "$k1" == $'\e' ]]; then
       if read -s -k1 -t 0.05 k2; then
         if read -s -k1 -t 0.05 k3; then
-          _YMLX_MENU_KEY=$'\e'"$k2$k3"
+          _MARV_MLX_MENU_KEY=$'\e'"$k2$k3"
         else
-          _YMLX_MENU_KEY=$'\e'"$k2"
+          _MARV_MLX_MENU_KEY=$'\e'"$k2"
         fi
       else
-        _YMLX_MENU_KEY=$'\e'
+        _MARV_MLX_MENU_KEY=$'\e'
       fi
     else
-      _YMLX_MENU_KEY="$k1"
+      _MARV_MLX_MENU_KEY="$k1"
     fi
   }
 
-  _ymlx_main_standard() {
+  _marv_mlx_main_standard() {
     local _up1=$'\e'[A _up2=$'\e'OA _down1=$'\e'[B _down2=$'\e'OB
     local _term_lines=${LINES:-24}
     (( _term_lines < 8 )) && _term_lines=24
-    _YMLX_MENU_VIS=$(( _term_lines - 6 ))
-    (( _YMLX_MENU_VIS < 1 )) && _YMLX_MENU_VIS=1
-    _YMLX_MENU_WIDTH=${COLUMNS:-80}
-    (( _YMLX_MENU_WIDTH < 40 )) && _YMLX_MENU_WIDTH=80
-    (( _YMLX_MENU_VIS < 1 )) && _YMLX_MENU_VIS=1
-    _YMLX_MENU_QUIT=0
-    _YMLX_MENU_DRAWN=0
-    _YMLX_MENU_NLINES=0
+    _MARV_MLX_MENU_VIS=$(( _term_lines - 6 ))
+    (( _MARV_MLX_MENU_VIS < 1 )) && _MARV_MLX_MENU_VIS=1
+    _MARV_MLX_MENU_WIDTH=${COLUMNS:-80}
+    (( _MARV_MLX_MENU_WIDTH < 40 )) && _MARV_MLX_MENU_WIDTH=80
+    (( _MARV_MLX_MENU_VIS < 1 )) && _MARV_MLX_MENU_VIS=1
+    _MARV_MLX_MENU_QUIT=0
+    _MARV_MLX_MENU_DRAWN=0
+    _MARV_MLX_MENU_NLINES=0
     stty -ixon 2>/dev/null
-    _ymlx_main_build
-    _ymlx_main_render
+    _marv_mlx_main_build
+    _marv_mlx_main_render
     while true; do
-      _ymlx_main_read_key
-      if [[ -z "$_YMLX_MENU_KEY" ]]; then
-        _ymlx_stop_all >/dev/null 2>&1
-        _YMLX_MENU_QUIT=1
+      _marv_mlx_main_read_key
+      if [[ -z "$_MARV_MLX_MENU_KEY" ]]; then
+        _marv_mlx_stop_all >/dev/null 2>&1
+        _MARV_MLX_MENU_QUIT=1
         break
       fi
-      local key="$_YMLX_MENU_KEY"
+      local key="$_MARV_MLX_MENU_KEY"
       if [[ "$key" == "$_up1" || "$key" == "$_up2" ]]; then
-        _ymlx_main_move -1
-        _ymlx_main_render
+        _marv_mlx_main_move -1
+        _marv_mlx_main_render
       elif [[ "$key" == "$_down1" || "$key" == "$_down2" ]]; then
-        _ymlx_main_move 1
-        _ymlx_main_render
+        _marv_mlx_main_move 1
+        _marv_mlx_main_render
       elif [[ "$key" == $'\n' || "$key" == $'\r' ]]; then
-        _ymlx_main_activate
-        (( _YMLX_MENU_QUIT )) && break
+        _marv_mlx_main_activate
+        (( _MARV_MLX_MENU_QUIT )) && break
       elif [[ "$key" == $'\t' ]]; then
-        _ymlx_main_toggle_thinking
+        _marv_mlx_main_toggle_thinking
       elif [[ "$key" == $'\x13' ]]; then
-        _ymlx_main_stop
+        _marv_mlx_main_stop
       elif [[ "$key" == $'\x04' ]]; then
-        _ymlx_main_delete
+        _marv_mlx_main_delete
       elif [[ "$key" == $'\x11' || "$key" == $'\e' ]]; then
-        if _ymlx_main_quit; then
+        if _marv_mlx_main_quit; then
           break
         fi
       fi
@@ -1871,82 +1876,82 @@ PY
   # script) with the latest on GitHub. Interactive menu only — headless runs
   # (run/stop/status) skip the network call. Short timeout, mirrors the
   # curated-list fetch; offline = no banner.
-  _ymlx_check_update() {
+  _marv_mlx_check_update() {
     (( $# == 0 )) || return 0
-    local installed="$(<"$_YMLX_SRC_DIR/VERSION" 2>/dev/null | tr -d '[:space:]')"
+    local installed="$(<"$_MARV_MLX_SRC_DIR/VERSION" 2>/dev/null | tr -d '[:space:]')"
     [[ -n "$installed" ]] || return 0
-    _YMLX_UPDATE_NEW=""
-    _YMLX_UPDATE_INSTALLED=""
+    _MARV_MLX_UPDATE_NEW=""
+    _MARV_MLX_UPDATE_INSTALLED=""
     local latest_file="$state_dir/latest-version" latest
-    if curl -fsSL --connect-timeout 3 --max-time 5 "https://raw.githubusercontent.com/pavsefcik/ymlx/main/VERSION" -o "$latest_file" 2>/dev/null; then
+    if curl -fsSL --connect-timeout 3 --max-time 5 "https://raw.githubusercontent.com/pavsefcik/marv-mlx/main/VERSION" -o "$latest_file" 2>/dev/null; then
       latest="$(tr -d '[:space:]' < "$latest_file")"
-      if [[ -n "$latest" ]] && _ymlx_version_gt "$latest" "$installed"; then
-        _YMLX_UPDATE_INSTALLED="$installed"
-        _YMLX_UPDATE_NEW="$latest"
+      if [[ -n "$latest" ]] && _marv_mlx_version_gt "$latest" "$installed"; then
+        _MARV_MLX_UPDATE_INSTALLED="$installed"
+        _MARV_MLX_UPDATE_NEW="$latest"
       fi
     fi
   }
 
   # Headless (non-interactive) helpers -------------------------------
   # pi always talks to :11500, so headless mode is primary-port only and never
-  # uses the parallel-run fallback that _ymlx_find_port offers the menu.
-  _ymlx_running_model() {  # echoes pid\tport\tmodel for :11500 (or nothing)
+  # uses the parallel-run fallback that _marv_mlx_find_port offers the menu.
+  _marv_mlx_running_model() {  # echoes pid\tport\tmodel for :11500 (or nothing)
     local pid port model
     while IFS=$'\t' read -r pid port model; do
       [[ "$port" == "11500" ]] && { printf '%s\t%s\t%s\n' "$pid" "$port" "$model"; return 0; }
-    done < <(_ymlx_running)
+    done < <(_marv_mlx_running)
     return 1
   }
 
-  _ymlx_headless_launch() {
+  _marv_mlx_headless_launch() {
     local model="$1"
     local port=11500
-    if ! _ymlx_port_free "$port"; then
-      print -u2 "ymlx: port 11500 is busy — stop the running model first (ymlx stop)"
+    if ! _marv_mlx_port_free "$port"; then
+      print -u2 "marv-mlx: port 11500 is busy — stop the running model first (marv-mlx stop)"
       return 1
     fi
     local safe="${model//\//_}"
     local log="$log_dir/${safe}-${port}.log"
-    local -a launch_flags=( "${YMLX_SERVER_FLAGS[@]}" )
-    _ymlx_apply_launch_thinking launch_flags "$model" "$hub_dir"
+    local -a launch_flags=( "${MARV_MLX_SERVER_FLAGS[@]}" )
+    _marv_mlx_apply_launch_thinking launch_flags "$model" "$hub_dir"
     # Rename this server to the model name in Activity Monitor / ps (see
     # lib/sitecustomize.py), so heads-up monitoring shows which model is up.
-    YMLX_PROCTITLE="$model" PYTHONPATH="$_YMLX_SRC_DIR/lib${PYTHONPATH:+:$PYTHONPATH}" \
+    MARV_MLX_PROCTITLE="$model" PYTHONPATH="$_MARV_MLX_SRC_DIR/lib${PYTHONPATH:+:$PYTHONPATH}" \
       mlx_vlm.server --model "$model" --port "$port" "${launch_flags[@]}" >"$log" 2>&1 &!
     local pid=$!
-    print "ymlx: starting $model on :$port (pid $pid) — log: $log"
+    print "marv-mlx: starting $model on :$port (pid $pid) — log: $log"
     local i
     for i in {1..2400}; do   # ~ up to 20 min for large/quantized models
       if ! kill -0 "$pid" 2>/dev/null; then
-        print -u2 "ymlx: server exited while loading — last log lines:"
+        print -u2 "marv-mlx: server exited while loading — last log lines:"
         tail -n 20 "$log" >&2
         return 1
       fi
       if curl -fs -o /dev/null --max-time 1 "http://127.0.0.1:$port/v1/models" 2>/dev/null; then
-        print "ymlx: ready $model on :$port (pid $pid)"
+        print "marv-mlx: ready $model on :$port (pid $pid)"
         return 0
       fi
       sleep 0.5
     done
-    print -u2 "ymlx: timed out waiting for $model to serve — log: $log"
+    print -u2 "marv-mlx: timed out waiting for $model to serve — log: $log"
     return 1
   }
 
-  _ymlx_headless_run() {
+  _marv_mlx_headless_run() {
     local model="$1"
     if [[ -z "$model" ]]; then
-      print -u2 "usage: ymlx run <model-id>, e.g. ymlx run mlx-community/Qwen3-8B"
+      print -u2 "usage: marv-mlx run <model-id>, e.g. marv-mlx run mlx-community/Qwen3-8B"
       return 2
     fi
     # Fast path: the requested model is already serving.
-    if [[ -n "$(_ymlx_running_model)" ]]; then
+    if [[ -n "$(_marv_mlx_running_model)" ]]; then
       local pid port cur
-      read -r pid port cur <<< "$(_ymlx_running_model)"
+      read -r pid port cur <<< "$(_marv_mlx_running_model)"
       if [[ "$cur" == "$model" ]]; then
-        print "ymlx: $model already running on :$port (pid $pid)"
+        print "marv-mlx: $model already running on :$port (pid $pid)"
         return 0
       fi
-      print "ymlx: stopping $cur (pid $pid) to switch to $model"
+      print "marv-mlx: stopping $cur (pid $pid) to switch to $model"
       kill "$pid" 2>/dev/null
       local i
       for i in {1..40}; do
@@ -1954,55 +1959,55 @@ PY
         sleep 0.2
       done
     fi
-    _ymlx_headless_launch "$model"
+    _marv_mlx_headless_launch "$model"
     return $?
   }
 
-  _ymlx_headless_stop() {
+  _marv_mlx_headless_stop() {
     local want="${1:-}"
-    # ymlx stop            -> the model on :11500
-    # ymlx stop <model>    -> that model, wherever it runs
-    # ymlx stop --all      -> every ymlx server on :11500–:11509
+    # marv-mlx stop            -> the model on :11500
+    # marv-mlx stop <model>    -> that model, wherever it runs
+    # marv-mlx stop --all      -> every marv-mlx server on :11500–:11509
     if [[ "$want" == "--all" ]]; then
       local n=0 pid port model
       while IFS=$'\t' read -r pid port model; do
-        [[ -n "$pid" ]] && kill "$pid" 2>/dev/null && { print "ymlx: stopped $model (:$port)"; (( n++ )); }
-      done < <(_ymlx_running)
-      (( n == 0 )) && print "ymlx: nothing running"
+        [[ -n "$pid" ]] && kill "$pid" 2>/dev/null && { print "marv-mlx: stopped $model (:$port)"; (( n++ )); }
+      done < <(_marv_mlx_running)
+      (( n == 0 )) && print "marv-mlx: nothing running"
       return 0
     fi
     if [[ -n "$want" ]]; then
       local n=0 pid port model
       while IFS=$'\t' read -r pid port model; do
         if [[ "$model" == "$want" ]]; then
-          kill "$pid" 2>/dev/null && { print "ymlx: stopped $model (:$port)"; (( n++ )); }
+          kill "$pid" 2>/dev/null && { print "marv-mlx: stopped $model (:$port)"; (( n++ )); }
         fi
-      done < <(_ymlx_running)
+      done < <(_marv_mlx_running)
       if (( n == 0 )); then
-        print -u2 "ymlx: no running server for '$want'"
+        print -u2 "marv-mlx: no running server for '$want'"
         return 1
       fi
       return 0
     fi
-    if [[ -n "$(_ymlx_running_model)" ]]; then
+    if [[ -n "$(_marv_mlx_running_model)" ]]; then
       local pid port cur
-      read -r pid port cur <<< "$(_ymlx_running_model)"
-      kill "$pid" 2>/dev/null && print "ymlx: stopped $cur (pid $pid)"
+      read -r pid port cur <<< "$(_marv_mlx_running_model)"
+      kill "$pid" 2>/dev/null && print "marv-mlx: stopped $cur (pid $pid)"
       return 0
     fi
-    print "ymlx: nothing running on :11500"
+    print "marv-mlx: nothing running on :11500"
     return 0
   }
 
-  _ymlx_headless_status() {
+  _marv_mlx_headless_status() {
     local json=0
     [[ "$1" == "--json" ]] && json=1
-    if [[ -n "$(_ymlx_running_model)" ]]; then
+    if [[ -n "$(_marv_mlx_running_model)" ]]; then
       local pid port cur
-      read -r pid port cur <<< "$(_ymlx_running_model)"
+      read -r pid port cur <<< "$(_marv_mlx_running_model)"
       if (( json )); then
         printf '{"model":"%s","port":%s,"pid":%s,"base_url":"http://127.0.0.1:%s/v1"}\n' \
-          "$(_ymlx_json_escape "$cur")" "$port" "$pid" "$port"
+          "$(_marv_mlx_json_escape "$cur")" "$port" "$pid" "$port"
       else
         print "$cur\t:$port\tpid $pid"
       fi
@@ -2012,7 +2017,7 @@ PY
     return 1
   }
 
-  _ymlx_headless_list() {
+  _marv_mlx_headless_list() {
     local json=0
     [[ "$1" == "--json" ]] && json=1
     local -a models=( "$hub_dir"/models--*(N/) )
@@ -2033,7 +2038,7 @@ PY
       for id in "${sorted[@]}"; do
         (( first )) || print -n ','
         first=0
-        print -n "\"$(_ymlx_json_escape "$id")\""
+        print -n "\"$(_marv_mlx_json_escape "$id")\""
       done
       print ']'
     else
@@ -2042,17 +2047,17 @@ PY
     return 0
   }
 
-  _ymlx_headless_info() {
+  _marv_mlx_headless_info() {
     local model="$1" json=0
     [[ "$2" == "--json" ]] && json=1
     if [[ -z "$model" ]]; then
-      print -u2 "usage: ymlx info <model-id> [--json]"
+      print -u2 "usage: marv-mlx info <model-id> [--json]"
       return 2
     fi
     local folder="$hub_dir/models--${model//\//--}"
     local family spec control markers rf size_kb=0
-    family=$(_ymlx_model_family "$model" "$hub_dir")
-    spec=$(_ymlx_thinking_spec "$model" "$hub_dir")
+    family=$(_marv_mlx_model_family "$model" "$hub_dir")
+    spec=$(_marv_mlx_thinking_spec "$model" "$hub_dir")
     control="${spec%%$'\t'*}"; spec="${spec#*$'\t'}"
     markers="${spec%%$'\t'*}"; rf="${spec#*$'\t'}"
     [[ -d "$folder" ]] && size_kb=$(du -sk "$folder" 2>/dev/null | awk '{print $1}')
@@ -2060,9 +2065,9 @@ PY
     [[ -d "$folder" ]] && installed=true
     if (( json )); then
       printf '{"model":"%s","installed":%s,"family":"%s","thinking_control":"%s","thinking_markers":"%s","reasoning_first":%s,"path":"%s","size_bytes":%s}\n' \
-        "$(_ymlx_json_escape "$model")" "$installed" "$family" "$control" "$markers" \
+        "$(_marv_mlx_json_escape "$model")" "$installed" "$family" "$control" "$markers" \
         "$([[ "$rf" == 1 ]] && echo true || echo false)" \
-        "$(_ymlx_json_escape "$folder")" "$(( size_kb * 1024 ))"
+        "$(_marv_mlx_json_escape "$folder")" "$(( size_kb * 1024 ))"
     else
       print "Model:      $model"
       print "Installed:  $installed"
@@ -2074,17 +2079,17 @@ PY
     return 0
   }
 
-  _ymlx_headless_endpoint() {
+  _marv_mlx_headless_endpoint() {
     local json=0
     [[ "$1" == "--json" ]] && json=1
     local pid port cur
-    if [[ -n "$(_ymlx_running_model)" ]]; then
-      read -r pid port cur <<< "$(_ymlx_running_model)"
+    if [[ -n "$(_marv_mlx_running_model)" ]]; then
+      read -r pid port cur <<< "$(_marv_mlx_running_model)"
     fi
     if (( json )); then
       if [[ -n "$cur" ]]; then
         printf '{"model":"%s","port":%s,"base_url":"http://127.0.0.1:%s/v1"}\n' \
-          "$(_ymlx_json_escape "$cur")" "$port" "$port"
+          "$(_marv_mlx_json_escape "$cur")" "$port" "$port"
         return 0
       fi
       print 'null'
@@ -2101,18 +2106,18 @@ PY
 
   # Download one or more models. Reuses the same loader the TUI download menu
   # uses, so caching/verification behavior stays identical.
-  _ymlx_headless_download() {
+  _marv_mlx_headless_download() {
     if (( $# == 0 )); then
-      print -u2 "usage: ymlx download <model-id>..."
+      print -u2 "usage: marv-mlx download <model-id>..."
       return 2
     fi
     local model rc=0
     for model in "$@"; do
-      print -u2 "ymlx: downloading $model …"
+      print -u2 "marv-mlx: downloading $model …"
       if uvx --from mlx-vlm python3 -c "from mlx_vlm.utils import load; load('$model')"; then
-        print -u2 "ymlx: downloaded $model"
+        print -u2 "marv-mlx: downloaded $model"
       else
-        print -u2 "ymlx: download failed for $model"
+        print -u2 "marv-mlx: download failed for $model"
         rc=1
       fi
     done
@@ -2123,7 +2128,7 @@ PY
   # back by tier, so shell users can see/pick any entry. Rows come from the
   # shared parser, so this can't drift from the TUI menu. Each entry shows its
   # title, its tagline, and the model id(s) to copy, with an installed tick.
-  _ymlx_headless_curated() {
+  _marv_mlx_headless_curated() {
     local json=0
     [[ "$1" == "--json" ]] && json=1
     local first=1
@@ -2140,13 +2145,13 @@ PY
         for m in "${dl[@]}"; do
           (( fi )) || idarr+=","
           fi=0
-          idarr+="\"$(_ymlx_json_escape "$m")\""
+          idarr+="\"$(_marv_mlx_json_escape "$m")\""
         done
         idarr+="]"
         printf '{"tier":%s,"title":"%s","models":%s,"tags":"%s","description":"%s"}' \
-          "${tier:-0}" "$(_ymlx_json_escape "$title")" "$idarr" \
-          "$(_ymlx_json_escape "$tags")" "$(_ymlx_json_escape "$desc")"
-      done < <(_ymlx_parse_catalog "$curated_file")
+          "${tier:-0}" "$(_marv_mlx_json_escape "$title")" "$idarr" \
+          "$(_marv_mlx_json_escape "$tags")" "$(_marv_mlx_json_escape "$desc")"
+      done < <(_marv_mlx_parse_catalog "$curated_file")
       print ']'
       return 0
     fi
@@ -2159,7 +2164,7 @@ PY
     while IFS=$'\x1f' read -r tier tname title ids tags desc; do
       c_tier+=( "${tier:-0}" ); c_tname+=( "$tname" ); c_ids+=( "$ids" )
       c_desc+=( "${desc:-$tags}" )   # tagline, or legacy tags as a fallback
-    done < <(_ymlx_parse_catalog "$curated_file")
+    done < <(_marv_mlx_parse_catalog "$curated_file")
 
     local i m w_id=0
     for (( i=1; i<=${#c_ids[@]}; i++ )); do
@@ -2194,7 +2199,7 @@ PY
         # The tagline rides along on the entry's first line, aligned after the
         # whole id column (so pairs stay readable).
         if (( first_id )) && [[ -n "${c_desc[$i]}" ]]; then
-          printf '  %s   %s%s%s%s\n' "$(_ymlx_pad "$m" "$w_id")" "$dim" "${c_desc[$i]}" "$off" "$mark"
+          printf '  %s   %s%s%s%s\n' "$(_marv_mlx_pad "$m" "$w_id")" "$dim" "${c_desc[$i]}" "$off" "$mark"
           first_id=0
         else
           printf '  %s%s\n' "$m" "$mark"
@@ -2208,97 +2213,97 @@ PY
 
   # Foreground launch + chat REPL. The server is session-tracked, so it is
   # stopped when the REPL exits (unlike `run`, which detaches for agents).
-  _ymlx_headless_chat() {
+  _marv_mlx_headless_chat() {
     local model="$1"
     if [[ -z "$model" ]]; then
-      print -u2 "usage: ymlx chat <model-id>"
+      print -u2 "usage: marv-mlx chat <model-id>"
       return 2
     fi
     local pid port cur
-    if [[ -n "$(_ymlx_running_model)" ]]; then
-      read -r pid port cur <<< "$(_ymlx_running_model)"
+    if [[ -n "$(_marv_mlx_running_model)" ]]; then
+      read -r pid port cur <<< "$(_marv_mlx_running_model)"
       if [[ "$cur" != "$model" ]]; then
-        print -u2 "ymlx: stopping $cur (pid $pid) to switch to $model"
+        print -u2 "marv-mlx: stopping $cur (pid $pid) to switch to $model"
         kill "$pid" 2>/dev/null
         local i
         for i in {1..40}; do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
       fi
     fi
-    if [[ -n "$(_ymlx_running_model)" ]]; then
-      read -r pid port cur <<< "$(_ymlx_running_model)"
-      _ymlx_chat_repl "$model" "$port"
+    if [[ -n "$(_marv_mlx_running_model)" ]]; then
+      read -r pid port cur <<< "$(_marv_mlx_running_model)"
+      _marv_mlx_chat_repl "$model" "$port"
       return $?
     fi
-    _ymlx_launch "$model" || return 1
-    _ymlx_chat_repl "$model" "$_YMLX_LAST_LAUNCH_PORT"
+    _marv_mlx_launch "$model" || return 1
+    _marv_mlx_chat_repl "$model" "$_MARV_MLX_LAST_LAUNCH_PORT"
     return $?
   }
 
   # ---- CLI (non-interactive) mode -------------------------------
-  # ``ymlx <sub> [args]`` runs and exits without the TUI. Servers started by
+  # ``marv-mlx <sub> [args]`` runs and exits without the TUI. Servers started by
   # `run` are DETACHED — they must survive this shell exiting (the pi
   # model_select hook relies on it) — so we clear the EXIT trap, never add the
-  # pid to _YMLX_SESSION_PIDS, and disown it. `chat` and the TUI instead keep
+  # pid to _MARV_MLX_SESSION_PIDS, and disown it. `chat` and the TUI instead keep
   # their server session-tracked so it dies with them.
   if (( $# > 0 )); then
-    local _YMLX_HEADLESS=1
+    local _MARV_MLX_HEADLESS=1
     local _sub="$1"; shift
     # `chat` and TUI keep the EXIT trap; the management verbs don't need it.
     [[ "$_sub" == chat ]] || trap - EXIT INT TERM HUP
     case "$_sub" in
-      run|serve)  _ymlx_headless_run      "$@" ;;
-      chat)       _ymlx_headless_chat     "$@" ;;
-      stop)       _ymlx_headless_stop     "$@" ;;
-      status)     _ymlx_headless_status   "$@" ;;
-      list|ls)    _ymlx_headless_list     "$@" ;;
-      info)       _ymlx_headless_info     "$@" ;;
-      endpoint)   _ymlx_headless_endpoint "$@" ;;
-      download)   _ymlx_headless_download "$@" ;;
-      curated|curator) _ymlx_headless_curated "$@" ;;
-      version)    print "$(<"$_YMLX_SRC_DIR/VERSION" 2>/dev/null | tr -d '[:space:]')" ;;
-      help|-h|--help) _ymlx_usage ;;
-      *) print -u2 "ymlx: unknown command '$_sub'"; print -u2 ""; _ymlx_usage >&2; return 2 ;;
+      run|serve)  _marv_mlx_headless_run      "$@" ;;
+      chat)       _marv_mlx_headless_chat     "$@" ;;
+      stop)       _marv_mlx_headless_stop     "$@" ;;
+      status)     _marv_mlx_headless_status   "$@" ;;
+      list|ls)    _marv_mlx_headless_list     "$@" ;;
+      info)       _marv_mlx_headless_info     "$@" ;;
+      endpoint)   _marv_mlx_headless_endpoint "$@" ;;
+      download)   _marv_mlx_headless_download "$@" ;;
+      curated|curator) _marv_mlx_headless_curated "$@" ;;
+      version)    print "$(<"$_MARV_MLX_SRC_DIR/VERSION" 2>/dev/null | tr -d '[:space:]')" ;;
+      help|-h|--help) _marv_mlx_usage ;;
+      *) print -u2 "marv-mlx: unknown command '$_sub'"; print -u2 ""; _marv_mlx_usage >&2; return 2 ;;
     esac
     return
   fi
 
-  _ymlx_check_update "$@"
+  _marv_mlx_check_update "$@"
 
   # Farewell shown on the NORMAL screen after the TUI exits, so the shell gets
   # its scrollback back and a one-line summary is left behind (rather than the
-  # leftover YMLX banner).
-  _ymlx_bye() {
-    _ymlx_tui_leave
+  # leftover marv-mlx banner).
+  _marv_mlx_bye() {
+    _marv_mlx_tui_leave
     print -n -- $'\e[2J\e[H'   # fresh screen: the sign-off sits at the very top
-    local msg="▌▌ YMLX says bye!"
-    (( ${_YMLX_BYE_STOPPED:-0} > 0 )) && msg+="  (stopped ${_YMLX_BYE_STOPPED} running model(s))"
+    local msg="▌▌ marv-mlx says bye!"
+    (( ${_MARV_MLX_BYE_STOPPED:-0} > 0 )) && msg+="  (stopped ${_MARV_MLX_BYE_STOPPED} running model(s))"
     gum style --foreground 212 --bold "$msg"
   }
 
-  _ymlx_tui_enter
+  _marv_mlx_tui_enter
   echo
-  _ymlx_main_header
-  if ! _ymlx_hf_has_token; then
+  _marv_mlx_main_header
+  if ! _marv_mlx_hf_has_token; then
     gum style --foreground 244 "HF Hub: unauthenticated — downloads still work but are slower. Offer a token at the first download."
   fi
   while true; do
-    _ymlx_main_standard
-    (( _YMLX_MENU_QUIT )) && break
+    _marv_mlx_main_standard
+    (( _MARV_MLX_MENU_QUIT )) && break
   done
-  _ymlx_bye
+  _marv_mlx_bye
 }
 
-_ymlx_cleanup() {
-  [[ -n "$_YMLX_TMP_CFG" && -f "$_YMLX_TMP_CFG" ]] && rm -f "$_YMLX_TMP_CFG"
+_marv_mlx_cleanup() {
+  [[ -n "$_MARV_MLX_TMP_CFG" && -f "$_MARV_MLX_TMP_CFG" ]] && rm -f "$_MARV_MLX_TMP_CFG"
   local pid
-  for pid in "${_YMLX_SESSION_PIDS[@]}"; do
+  for pid in "${_MARV_MLX_SESSION_PIDS[@]}"; do
     [[ -n "$pid" ]] && kill "$pid" 2>/dev/null
   done
-  [[ -n "$_YMLX_STTY_SAVED" ]] && stty "$_YMLX_STTY_SAVED" 2>/dev/null
+  [[ -n "$_MARV_MLX_STTY_SAVED" ]] && stty "$_MARV_MLX_STTY_SAVED" 2>/dev/null
   # Always give the terminal back: never leave the user on the alternate screen
   # (also covers Ctrl-C / kill).
-  _ymlx_tui_leave
+  _marv_mlx_tui_leave
 }
-trap _ymlx_cleanup EXIT INT TERM HUP
+trap _marv_mlx_cleanup EXIT INT TERM HUP
 
-ymlx "$@"
+marv-mlx "$@"

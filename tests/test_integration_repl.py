@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 
 import mock_server  # noqa: E402
 
-REPL = os.path.join(os.path.dirname(__file__), "..", "lib", "ymlx_repl.py")
+REPL = os.path.join(os.path.dirname(__file__), "..", "lib", "marv_mlx_repl.py")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 

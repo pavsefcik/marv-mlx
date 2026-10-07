@@ -1,94 +1,113 @@
-# ymlx
+# marv-mlx
 
 A small zsh launcher for browsing, running and downloading local MLX LLMs on
 Apple Silicon, with a drop-in OpenAI-compatible REST endpoint at
 `localhost:11500`.
+
+**marv-mlx** is the runtime (backend) layer of the **MARV** family — *Modular
+Agent Runtime Valve*. It manages models and serves them; the sibling
+[marv](https://github.com/pavsefcik/marv) harness is the coding agent that talks
+to them.
+
+```
+user ──► marv   (harness: agent loop · tools · sessions · TUI)
+            │  OpenAI-compatible HTTP :11500 + lifecycle CLI
+            ▼
+         marv-mlx (runtime: catalog · download · run/swap · mlx_vlm.server)
+            │
+            ▼
+         Hugging Face hub + Apple Silicon (MLX)
+```
+
+The harness is self-sufficient (it can launch `mlx_vlm.server` itself), so
+`marv-mlx` is the *recommended* manager, not a hard runtime dependency. Both
+layers read the same Hugging Face hub.
 
 ## Install
 
 The repo ships as a [pi package](https://pi.dev/packages) — install [pi](https://pi.dev) once, then everything else comes from in-pi commands:
 
 ```sh
-pi install git:github.com/pavsefcik/ymlx
+pi install git:github.com/pavsefcik/marv-mlx
 ```
 
-Inside pi, run **`/ymlx-setup`** (auto-offered on first launch): it installs
+Inside pi, run **`/marv-mlx-setup`** (auto-offered on first launch): it installs
 `uv`, `gum` and `mlx-vlm` (Xcode CLT and Homebrew are the only manual steps),
-copies `ymlx.zsh` to a stable directory, and wires a headless wrapper. Then
-**`/ymlx-sync`** and pick a model via `/model` — it starts and switches ymlx to
+copies `marv-mlx.zsh` to a stable directory, and wires a headless wrapper. Then
+**`/marv-mlx-sync`** and pick a model via `/model` — it starts and switches marv-mlx to
 the selected model automatically, all offline.
 
-Prefer ymlx standalone (no pi)? `git clone` the repo and run `sh install.sh`
+Prefer marv-mlx standalone (no pi)? `git clone` the repo and run `sh install.sh`
 — same deps, plus the pi extension and wrapper. It adds the
-`ymlx-launcher.zsh` source line to `~/.zshrc`, so `ymlx` is available in any
+`marv-mlx-launcher.zsh` source line to `~/.zshrc`, so `marv-mlx` is available in any
 new shell.
 
 ### Standalone — one line (curl)
 
-Installs to `~/.ymlx` (`YMLX_DIR` to override) and wires the launcher into `~/.zshrc`:
+Installs to `~/.marv-mlx` (`MARV_MLX_DIR` to override) and wires the launcher into `~/.zshrc`:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/pavsefcik/ymlx/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/pavsefcik/marv-mlx/main/install.sh | sh
 ```
 
 ### Standalone — Homebrew (tap)
 
 ```sh
-brew install pavsefcik/ymlx/ymlx
+brew install pavsefcik/marv-mlx/marv-mlx
 ```
 
 One line on any Homebrew version. Homebrew ≥ 6 auto-trusts exactly this
 formula on a fully-qualified install, so there's no separate tap/trust step.
-For the shorter `ymlx` name (tapped + trusted):
+For the shorter `marv-mlx` name (tapped + trusted):
 
 ```sh
-brew trust pavsefcik/ymlx   # Homebrew 6+ only: taps are executable Ruby, so they need explicit trust
-brew tap pavsefcik/ymlx
-brew install ymlx
+brew trust pavsefcik/marv-mlx   # Homebrew 6+ only: taps are executable Ruby, so they need explicit trust
+brew tap pavsefcik/marv-mlx
+brew install marv-mlx
 ```
 
 The formula brings `gum` + `uv`; run
-`sh "$(brew --prefix)/opt/ymlx/libexec/install.sh"` once — it installs the
+`sh "$(brew --prefix)/opt/marv-mlx/libexec/install.sh"` once — it installs the
 `mlx-vlm` tool and adds the launcher to `~/.zshrc`. Then open a new terminal
-and run `ymlx`.
+and run `marv-mlx`.
 
 ## Run
 
 Run it from any terminal with:
 
 ```sh
-ymlx
+marv-mlx
 ```
 
-Quitting restores your previous screen (ymlx runs on the terminal's alternate
+Quitting restores your previous screen (marv-mlx runs on the terminal's alternate
 screen buffer) and signs off at the top of a fresh screen with an
-`▌▌ YMLX says bye!` line.
+`▌▌ marv-mlx says bye!` line.
 
 ## Commands
 
-Besides the TUI, `ymlx` is a normal command-line tool with data on stdout and
+Besides the TUI, `marv-mlx` is a normal command-line tool with data on stdout and
 logs on stderr, so it composes with scripts, agents and other programs.
 
 ```sh
-ymlx                        # interactive TUI
-ymlx run <model>            # start a model on :11500 (detached) and wait until ready
-ymlx chat <model>           # start a model and open the built-in chat REPL
-ymlx stop [<model>|--all]   # stop a model (default: the one on :11500)
-ymlx status [--json]        # what is running
-ymlx list [--json]          # locally installed models
-ymlx download <model>...    # download model(s) from the HuggingFace Hub
-ymlx curated [--json]       # the full curated catalog, all RAM tiers
-ymlx info <model> [--json]  # size, family, thinking spec, path
-ymlx endpoint [--json]      # base URL / model of the running server
+marv-mlx                        # interactive TUI
+marv-mlx run <model>            # start a model on :11500 (detached) and wait until ready
+marv-mlx chat <model>           # start a model and open the built-in chat REPL
+marv-mlx stop [<model>|--all]   # stop a model (default: the one on :11500)
+marv-mlx status [--json]        # what is running
+marv-mlx list [--json]          # locally installed models
+marv-mlx download <model>...    # download model(s) from the HuggingFace Hub
+marv-mlx curated [--json]       # the full curated catalog, all RAM tiers
+marv-mlx info <model> [--json]  # size, family, thinking spec, path
+marv-mlx endpoint [--json]      # base URL / model of the running server
 ```
 
-Hidden aliases: `ymlx serve` = `run`, `ymlx curator` = `curated`,
-`ymlx ls` = `list`.
+Hidden aliases: `marv-mlx serve` = `run`, `marv-mlx curator` = `curated`,
+`marv-mlx ls` = `list`.
 
 Example — see what's running, then hit it:
 
 ```sh
-ymlx status --json
+marv-mlx status --json
 # {"model":"mlx-community/Qwen3.5-4B-MLX-4bit","port":11500,"pid":12345,"base_url":"http://127.0.0.1:11500/v1"}
 
 curl -s http://127.0.0.1:11500/v1/chat/completions \
@@ -97,13 +116,13 @@ curl -s http://127.0.0.1:11500/v1/chat/completions \
 ```
 
 Machine-readable output (`--json`) and a stable exit-code contract — `0` ok,
-`1` failure, `2` usage error — make ymlx safe to drive from the `ymlx-sync` pi
+`1` failure, `2` usage error — make marv-mlx safe to drive from the `marv-mlx-sync` pi
 extension or your own tooling.
 
 ## Use
 
 - Start model and run — Enter starts the highlighted model and drops straight
-  into chat. If another model is already running, ymlx asks **Yes** (swap:
+  into chat. If another model is already running, marv-mlx asks **Yes** (swap:
   stop it and run the selected one on `:11500`), **No**, or **Run in parallel**
   (keep both, the new one on the next free port). Multiple models can run at
   once; each shows a `●` in the menu, and `^s` stops the highlighted one.
@@ -119,7 +138,7 @@ extension or your own tooling.
   returns. `s` or
   `/` searches across all chats, `o` opens the chat folder. Deleted chats are
   gone for good (no trash).
-- Download from a curated list ([ymlx-curator](https://github.com/pavsefcik/ymlx-curator),
+- Download from a curated list ([marv-curator](https://github.com/pavsefcik/marv-curator),
   filtered to your RAM tier) or paste any HuggingFace id
 - Ministral models are shipped as Instruct+Reasoning pairs: downloading a
   Ministral entry fetches both halves, the menu shows a single
@@ -134,13 +153,13 @@ extension or your own tooling.
 **Basic settings** — thinking (default/on/off), temperature, max tokens, system
 prompt. **Advanced settings** — every `mlx_vlm` flag (`--kv-bits`,
 `--draft-model`, adapters, extra model slots, …). Everything persists in
-`~/.cache/ymlx/config.zsh`.
+`~/.cache/marv/mlx/config.zsh`.
 
 ## Updates
 
-ymlx checks GitHub for a newer version at every launch; when one exists a
+marv-mlx checks GitHub for a newer version at every launch; when one exists a
 `▲ Update available: X.Y.Z → A.B.C` banner appears and the menu gains an
 **Update to latest version** entry that pulls and reinstalls in place (a
 pi-managed install instead guides you to `pi update`; a curl/managed copy is
 refreshed from GitHub automatically). Installed version lives
-in the repo-root `VERSION` file (semver, currently 0.135.1).
+in the repo-root `VERSION` file (semver, currently 0.136.0).
