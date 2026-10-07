@@ -30,13 +30,13 @@ models in-pi and runs a headless `marv-mlx run`.
   `~/.pi/agent/extensions/`).
 - `scripts/` — one-off migration scripts.
 - `tests/` — Python unittest (`mock_server.py`, `test_integration_repl.py`,
-  `test_marv_mlx_repl.py`) + zsh helper tests (`test_helpers.zsh`).
+  `test_marv_mlx_repl.py`) + zsh helper tests (`test_helpers.zsh`, `test_cli.zsh`, `test_migration.zsh`).
 - `Makefile` — release tooling.
 
 ## Commands
 
 - Test: `make test` (runs `python3 -m unittest discover -s tests` then
-  `zsh tests/test_helpers.zsh`).
+  `zsh tests/test_helpers.zsh`, `zsh tests/test_cli.zsh`, `zsh tests/test_migration.zsh`).
 - Validate the installer: `sh -n install.sh`.
 - No lint/build step is enforced for the zsh; be careful with `set -e` /
   `POSIX sh` compatibility in `install.sh` (it runs under `/bin/sh`).

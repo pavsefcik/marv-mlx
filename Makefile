@@ -28,6 +28,7 @@ test:
 	python3 -m unittest discover -s tests
 	zsh tests/test_helpers.zsh
 	zsh tests/test_cli.zsh
+	zsh tests/test_migration.zsh
 
 # Refuse to tag a dirty tree.
 check:

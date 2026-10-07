@@ -162,10 +162,15 @@ _marv_mlx_migrate_zshrc() {
 }
 
 # Replace the stale `ymlx` pi wrapper with a forwarding stub and drop the old
-# extension copy.
+# extension copy. The stub is (re)created whenever a legacy install is detected
+# (old wrapper present, or the old state dir exists), so an interrupted earlier
+# migration cannot leave the alias missing.
 _marv_mlx_migrate_pi_files() {
   local old_wrapper="$HOME/.pi/agent/bin/ymlx"
-  if [[ -f "$old_wrapper" ]] && ! grep -q 'renamed to marv-mlx' "$old_wrapper" 2>/dev/null; then
+  local legacy_detected=0
+  [[ -f "$old_wrapper" || -d "$HOME/.cache/ymlx" ]] && legacy_detected=1
+  if (( legacy_detected )) && ! grep -q 'renamed to marv-mlx' "$old_wrapper" 2>/dev/null; then
+    mkdir -p "$HOME/.pi/agent/bin"
     cat > "$old_wrapper" <<'EOF_YMLX'
 #!/usr/bin/env bash
 # Deprecated alias written by the marv-mlx migration; forwards to marv-mlx.

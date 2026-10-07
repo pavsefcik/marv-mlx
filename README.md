@@ -162,4 +162,4 @@ marv-mlx checks GitHub for a newer version at every launch; when one exists a
 **Update to latest version** entry that pulls and reinstalls in place (a
 pi-managed install instead guides you to `pi update`; a curl/managed copy is
 refreshed from GitHub automatically). Installed version lives
-in the repo-root `VERSION` file (semver, currently 0.136.2).
+in the repo-root `VERSION` file (semver, currently 0.136.3).

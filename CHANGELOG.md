@@ -4,6 +4,18 @@ All notable changes to marv-mlx are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Version numbers are kept in
 sync across `VERSION`, `package.json`, the Homebrew formula, and the README.
 
+## [0.136.3] - 2026-10-07
+
+### Fixed
+- **The migration re-creates the `ymlx` deprecation stub whenever a legacy
+  install is detected** (old wrapper present, or `~/.cache/ymlx` still exists),
+  so an interrupted earlier migration cannot leave the `ymlx` alias missing.
+
+### Added
+- **Migration test coverage** (`tests/test_migration.zsh`, wired into
+  `make test`): state copy, config shim, narrow `~/.zshrc` rewrite (sibling
+  launchers untouched), pi wrapper/extension handling, and idempotency.
+
 ## [0.136.2] - 2026-10-07
 
 ### Fixed
