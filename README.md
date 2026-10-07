@@ -37,10 +37,10 @@ copies `marv-mlx.zsh` to a stable directory, and wires a headless wrapper. Then
 **`/marv-mlx-sync`** and pick a model via `/model` — it starts and switches marv-mlx to
 the selected model automatically, all offline.
 
-Prefer marv-mlx standalone (no pi)? `git clone` the repo and run `sh install.sh`
-— same deps, plus the pi extension and wrapper. It adds the
-`marv-mlx-launcher.zsh` source line to `~/.zshrc`, so `marv-mlx` is available in any
-new shell.
+Prefer `marv-mlx` standalone (no pi)? `git clone` the repo and run
+`sh install.sh` — same deps, plus the pi extension and wrapper. It adds the
+`marv-mlx-launcher.zsh` source line to `~/.zshrc`, so `marv-mlx` is available in
+any new shell.
 
 ### Standalone — one line (curl)
 
