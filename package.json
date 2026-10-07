@@ -1,6 +1,6 @@
 {
   "name": "marv-mlx",
-  "version": "0.136.1",
+  "version": "0.136.2",
   "description": "Local MLX LLM manager for Apple Silicon, plus the marv-mlx-sync pi extension (model sync + headless `marv-mlx run` on :11500)",
   "license": "MIT",
   "keywords": ["pi-package", "mlx", "llm", "local-ai"],

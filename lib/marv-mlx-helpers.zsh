@@ -91,30 +91,79 @@ _marv_mlx_tui_leave() {
 _marv_mlx_migrate_legacy_state() {
   local old="$HOME/.cache/ymlx"
   local new="$HOME/.cache/marv/mlx"
-  # 1. State dir: move to the shared marv cache root (only if target absent).
+  _marv_mlx_migrate_state_dir "$old" "$new"
+  _marv_mlx_migrate_config "$new/config.zsh"
+  _marv_mlx_migrate_zshrc "$HOME/.zshrc"
+  _marv_mlx_migrate_pi_files
+  return 0
+}
+
+# Copy old runtime state to the shared marv cache root (target-absent guard).
+_marv_mlx_migrate_state_dir() {
+  local old="$1" new="$2"
   if [[ -d "$old" && ! -e "$new" ]]; then
     mkdir -p "${new:h}"
     cp -R "$old" "$new" 2>/dev/null && \
       print -u2 "marv-mlx: migrated state $old -> $new"
   fi
-  # 2. Managed block markers inside config.zsh.
-  local cf="$new/config.zsh"
-  if [[ -f "$cf" ]] && grep -q '^# >>> ymlx-managed' "$cf" 2>/dev/null; then
+}
+
+# Rewrite the managed-block markers and legacy `YMLX_*` names in config.zsh.
+_marv_mlx_migrate_config() {
+  local cf="$1"
+  [[ -f "$cf" ]] || return 0
+  if grep -q '^# >>> ymlx-managed' "$cf" 2>/dev/null; then
     sed -i '' 's/^# >>> ymlx-managed/# >>> marv-mlx-managed/; s/^# <<< end ymlx-managed/# <<< end marv-mlx-managed/' "$cf"
   fi
-  # 3. Legacy variable names inside config.zsh (managed quick settings and the
-  # hand-edited CHAT_FLAGS/SERVER_FLAGS below the block).
-  if [[ -f "$cf" ]] && grep -q '^YMLX_' "$cf" 2>/dev/null; then
+  if grep -q '^YMLX_' "$cf" 2>/dev/null; then
     sed -i '' 's/^\(YMLX_\)/MARV_MLX_/' "$cf"
   fi
-  # 4. ~/.zshrc launcher line (old path -> new path).
-  local zshrc="$HOME/.zshrc"
-  if [[ -f "$zshrc" ]] && grep -q 'ymlx-launcher.zsh' "$zshrc" 2>/dev/null; then
-    sed -i '' 's|ymlx-launcher.zsh|marv-mlx-launcher.zsh|g' "$zshrc"
+}
+
+# Fix the launcher line in ~/.zshrc. Deliberately narrow: only lines that name
+# this project's launcher (ymlx/marv-mlx) are touched, so sibling launchers
+# (wren, err, marv, …) are never rewritten.
+_marv_mlx_migrate_zshrc() {
+  local zshrc="$1"
+  [[ -f "$zshrc" ]] || return 0
+  # Prefer the directory marv-mlx.zsh exported at source time; fall back to $0.
+  local src_dir="${_MARV_MLX_SRC_DIR:-${0:A:h}}"
+  local target="$src_dir/marv-mlx-launcher.zsh"
+  grep -qE '(ymlx|marv-mlx)-launcher\.zsh' "$zshrc" 2>/dev/null || return 0
+  # Already pointing at the right path? Nothing to do (idempotent).
+  grep -qF "$target" "$zshrc" 2>/dev/null && \
+    ! grep -q '^# ymlx$' "$zshrc" 2>/dev/null && return 0
+
+  local tmp="$zshrc.marv-mlx.tmp" line changed=0
+  : > "$tmp"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" == *ymlx-launcher.zsh* || "$line" == *marv-mlx-launcher.zsh* ]]; then
+      # Rewrite the first quoted path so the surrounding line shape (comment,
+      # `source "…"`, indentation) is preserved.
+      if [[ "$line" == *\"*\"* ]]; then
+        local head="${line%%\"*}"  # text before the opening quote
+        local rest="${line#*\"}"   # text after the opening quote
+        local tail="${rest#*\"}"  # text after the closing quote
+        line="${head}\"${target}\"${tail}"
+      else
+        line="$target"
+      fi
+      changed=1
+    fi
+    [[ "$line" == '# ymlx' ]] && { line='# marv-mlx'; changed=1; }
+    print -r -- "$line" >> "$tmp"
+  done < "$zshrc"
+  if (( changed )); then
+    mv "$tmp" "$zshrc"
     print -u2 "marv-mlx: updated ~/.zshrc launcher line"
+  else
+    rm -f "$tmp"
   fi
-  # 5. Stale pi wrapper for the old command name: replace it with a forwarding
-  #    deprecation stub (the old one pointed at ymlx.zsh, which no longer exists).
+}
+
+# Replace the stale `ymlx` pi wrapper with a forwarding stub and drop the old
+# extension copy.
+_marv_mlx_migrate_pi_files() {
   local old_wrapper="$HOME/.pi/agent/bin/ymlx"
   if [[ -f "$old_wrapper" ]] && ! grep -q 'renamed to marv-mlx' "$old_wrapper" 2>/dev/null; then
     cat > "$old_wrapper" <<'EOF_YMLX'
@@ -125,9 +174,7 @@ exec marv-mlx "$@"
 EOF_YMLX
     chmod +x "$old_wrapper"
   fi
-  # 6. Stale pi extension copy.
   [[ -f "$HOME/.pi/agent/extensions/ymlx-sync.ts" ]] && rm -f "$HOME/.pi/agent/extensions/ymlx-sync.ts"
-  return 0
 }
 
 # Print a line on the NORMAL screen, leaving the alt buffer first so it stays

@@ -4,6 +4,15 @@ All notable changes to marv-mlx are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Version numbers are kept in
 sync across `VERSION`, `package.json`, the Homebrew formula, and the README.
 
+## [0.136.2] - 2026-10-07
+
+### Fixed
+- **The state migration no longer rewrites unrelated `~/.zshrc` launcher
+  lines.** v0.136.1's rewrite matched any `source "…launcher.zsh"` line, which
+  could clobber sibling projects' launchers. It now only touches lines naming
+  `ymlx-launcher.zsh` / `marv-mlx-launcher.zsh`, updates the path to this
+  checkout, and is idempotent.
+
 ## [0.136.1] - 2026-10-07
 
 ### Deprecated
