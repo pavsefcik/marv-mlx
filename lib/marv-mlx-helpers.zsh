@@ -113,8 +113,18 @@ _marv_mlx_migrate_legacy_state() {
     sed -i '' 's|ymlx-launcher.zsh|marv-mlx-launcher.zsh|g' "$zshrc"
     print -u2 "marv-mlx: updated ~/.zshrc launcher line"
   fi
-  # 5. Stale pi wrapper for the old command name.
-  [[ -f "$HOME/.pi/agent/bin/ymlx" ]] && rm -f "$HOME/.pi/agent/bin/ymlx"
+  # 5. Stale pi wrapper for the old command name: replace it with a forwarding
+  #    deprecation stub (the old one pointed at ymlx.zsh, which no longer exists).
+  local old_wrapper="$HOME/.pi/agent/bin/ymlx"
+  if [[ -f "$old_wrapper" ]] && ! grep -q 'renamed to marv-mlx' "$old_wrapper" 2>/dev/null; then
+    cat > "$old_wrapper" <<'EOF_YMLX'
+#!/usr/bin/env bash
+# Deprecated alias written by the marv-mlx migration; forwards to marv-mlx.
+echo "ymlx has been renamed to marv-mlx; run 'marv-mlx' instead." >&2
+exec marv-mlx "$@"
+EOF_YMLX
+    chmod +x "$old_wrapper"
+  fi
   # 6. Stale pi extension copy.
   [[ -f "$HOME/.pi/agent/extensions/ymlx-sync.ts" ]] && rm -f "$HOME/.pi/agent/extensions/ymlx-sync.ts"
   return 0

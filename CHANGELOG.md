@@ -4,6 +4,15 @@ All notable changes to marv-mlx are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Version numbers are kept in
 sync across `VERSION`, `package.json`, the Homebrew formula, and the README.
 
+## [0.136.1] - 2026-10-07
+
+### Deprecated
+- **`ymlx`.** The installer and one-time migration now write a
+  `~/.pi/agent/bin/ymlx` wrapper that warns and forwards to `marv-mlx`, so old
+  scripts and muscle memory keep working for one release. Remove after the
+  rename is fully absorbed. (The migration previously replaced the stale wrapper
+  with nothing.)
+
 ## [0.136.0] - 2026-10-07
 
 ### Changed
@@ -22,8 +31,9 @@ sync across `VERSION`, `package.json`, the Homebrew formula, and the README.
 - **One-time state migration (`lib/marv-mlx-helpers.zsh`).** On first launch,
   `~/.cache/ymlx` is copied to `~/.cache/marv/mlx` (target-absent guard, never
   destructive), the managed-block markers and `YMLX_QUICK_*` names in
-  `config.zsh` are rewritten, the `~/.zshrc` launcher line is updated, and stale
-  `ymlx` pi wrapper/extension copies are removed. Idempotent.
+  `config.zsh` are rewritten, the `~/.zshrc` launcher line is updated, and the
+  stale `ymlx` pi wrapper is replaced with a forwarding deprecation stub.
+  Idempotent.
 
 ## [0.135.1] - 2026-10-06
 
