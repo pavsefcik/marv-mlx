@@ -14,13 +14,14 @@ models in-pi and runs a headless `marv-mlx run`.
 
 - `pavsefcik/marv-mlx` — this repo (zsh TUI + `install.sh` + Homebrew formula source).
 - `pavsefcik/marv-curator` — `marv-curator.md`, the hand-picked download catalog
-  (flag-titled blocks consumed by the Download menu).
+  (blank-line-separated 2-line blocks: model id then tagline). Consumed by the
+  Download menu. (Older 3-line/flag-titled shapes still parse but are legacy.)
 - `pavsefcik/homebrew-marv-mlx` — the tap; `Formula/marv-mlx.rb` (path `../homebrew-marv-mlx`).
 
 ## Layout
 
-- `marv-mlx.zsh` — the whole TUI (one large file, ~75KB). Read it in full before
-  wide-ranging edits.
+- `marv-mlx.zsh` — the whole TUI (one large file, ~2300 lines / ~85KB). Read it
+  in full before wide-ranging edits.
 - `marv-mlx-launcher.zsh` — sourced from `~/.zshrc`; provides the `marv-mlx` shell entry.
 - `install.sh` — standalone installer (brew `uv`/`gum`, `mlx-vlm` as a uv tool,
   pi extension + wrapper, wires `~/.zshrc`).
@@ -57,9 +58,11 @@ models in-pi and runs a headless `marv-mlx run`.
 Step 4 (`install.sh`) is the fragile part. It must:
 
 - Resolve both `UV_TOOL_BIN` (`uv tool dir --bin`) and `UV_TOOL_DIR`
-  (`uv tool dir`) up front; **never hardcode `~/.local/bin`** — uv's dirs are
+  (`uv tool dir`) up front; **prefer those over hardcoded paths** — uv's dirs are
   configurable (`UV_TOOL_BIN_DIR`, `XDG_BIN_HOME`, `XDG_DATA_HOME`) and depend
-  on how uv was installed (brew vs standalone).
+  on how uv was installed (brew vs standalone). Note `install.sh` *does* fall
+  back to `$HOME/.local/bin` / `~/.local/share/uv/tools` when `uv tool dir`
+  fails, so "never hardcode" is a preference, not an absolute.
 - Install with `uv tool install "mlx-vlm@0.7.4" --with jinja2 --with setproctitle --force`.
 - **Never pass `--bin-dir`** to `uv tool install` — it is an invalid flag.
 - Retry the install up to 3 times (the tool is large / network-bound).
@@ -77,12 +80,27 @@ missing).
 - **Rename shim (one release).** `_marv_mlx_migrate_legacy_state`
   (`lib/marv-mlx-helpers.zsh`) copies `~/.cache/ymlx` to `~/.cache/marv/mlx`,
   rewrites the old managed-block markers/`YMLX_QUICK_*` names in `config.zsh`,
-  fixes the `~/.zshrc` launcher line, and removes stale `ymlx` pi wrapper/extension
-  copies. It is idempotent and target-absent guarded (never destructive). It runs
-  before the new state dir is created. Remove it once the rename is fully absorbed.
+  fixes the `~/.zshrc` launcher line, replaces the old `ymlx` pi wrapper with a
+  forwarding deprecation stub, and removes the stale `ymlx` pi extension copy.
+  It is idempotent and target-absent guarded (never destructive). It runs
+  before the new state dir is created. Remove it once the rename is fully
+  absorbed.
 
 ## Known pitfalls
 
+- **`extensions/marv-mlx-sync.ts` diverges from `install.sh`.** The pi-managed
+  setup installs `uv tool install mlx-vlm --with jinja2` (unpinned, no
+  `--force`, no shim), appends `$HOME/.local/bin` to `~/.zshrc` directly, and
+  copies only `marv-mlx.zsh` + `lib/marv-mlx-helpers.zsh` + `lib/marv_mlx_repl.py`
+  + `VERSION` to the stable dir — **not** `lib/sitecustomize.py`, so the
+  process-rename feature silently no-ops on a pi copy. It also hardcodes a
+  dev-fallback repo path `~/Dev/projects/marv-mlx`. Keep it in sync with the
+  installer invariants above, or document the divergence.
+- **`scripts/migrate-shared-blobs.py` is required after enabling
+  `HF_HUB_DISABLE_SHARED_BLOBS=1`** (which `marv-mlx.zsh` exports process-wide on
+  launch). Run it once to rewrite existing hub blobs.
+- **Hidden global side effects on launch:** `HF_TOKEN` is injected from
+  `~/.cache/huggingface/token` and `HF_HUB_DISABLE_SHARED_BLOBS=1` is exported.
 - **raw.githubusercontent.com CDN lags `main`.** After pushing, the one-liner
   `curl -fsSL .../marv-mlx/main/install.sh | sh` may serve a stale commit for a
   while. For a guaranteed-correct test, pin the URL to the full commit SHA:
@@ -92,10 +110,10 @@ missing).
   This repo uses the noreply email `187490479+pavsefcik@users.noreply.github.com`
   (set repo-locally as `user.email`). Keep using it for commits; don't reintroduce
   the private email.
-- **Flags in the Download menu are cosmetic.** The `marv-curator.md` titles
-  carry flags with a space; if the flag looks glued to the name it's a terminal
-  emoji-width rendering artifact, not a bug. The download model ID comes from
-  the subtitle line, never from the flag/title.
+- **Flags in the Download menu are a legacy-format artifact.** The live
+  `marv-curator.md` catalog is plain `id` + `tagline` lines (no flags, titles or
+  subtitle); only older/legacy blocks carried them. If you see a "glued" flag it
+  is cosmetic and irrelevant — the model id always comes from the id line.
 - **Open questions / pending work:** the standalone install on a fresh test
   machine hit uv's "only links convert+generate" quirk (uv 0.12.19). The shim
   fallback addresses it; a clean re-run of the current installer should be

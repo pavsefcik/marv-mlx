@@ -35,7 +35,8 @@ Inside pi, run **`/marv-mlx-setup`** (auto-offered on first launch): it installs
 `uv`, `gum` and `mlx-vlm` (Xcode CLT and Homebrew are the only manual steps),
 copies `marv-mlx.zsh` to a stable directory, and wires a headless wrapper. Then
 **`/marv-mlx-sync`** and pick a model via `/model` — it starts and switches marv-mlx to
-the selected model automatically, all offline.
+the selected model automatically. Requires network for the first install (brew/
+`uv`), then runs offline once models are cached.
 
 Prefer `marv-mlx` standalone (no pi)? `git clone` the repo and run
 `sh install.sh` — same deps, plus the pi extension and wrapper. It adds the
@@ -99,6 +100,8 @@ marv-mlx download <model>...    # download model(s) from the HuggingFace Hub
 marv-mlx curated [--json]       # the full curated catalog, all RAM tiers
 marv-mlx info <model> [--json]  # size, family, thinking spec, path
 marv-mlx endpoint [--json]      # base URL / model of the running server
+marv-mlx version                # installed version
+marv-mlx help                   # usage
 ```
 
 Hidden aliases: `marv-mlx serve` = `run`, `marv-mlx curator` = `curated`,
@@ -117,7 +120,19 @@ curl -s http://127.0.0.1:11500/v1/chat/completions \
 
 Machine-readable output (`--json`) and a stable exit-code contract — `0` ok,
 `1` failure, `2` usage error — make marv-mlx safe to drive from the `marv-mlx-sync` pi
-extension or your own tooling.
+extension or your own tooling. Two edge cases are part of that contract:
+
+- `status --json` when nothing is running prints `null` **and exits 1** (idle is
+  treated as a non-zero status, not a failure) — the harness's
+  `MarvMlxCli.status()` relies on this.
+- `stop <model>` when that model is not running exits `1`, while `stop` (port
+  11500) and `stop --all` exit `0` when already idle.
+
+The headless subcommands (`run`/`stop`/`status`/`list`/`info`/`endpoint`/
+`download`/`curated`/`version`/`help`) clear their signal traps so they compose
+from scripts; only `chat` keeps them. `run` disowns the server and polls for
+readiness for up to ~20 minutes. Headless always uses `:11500`; the parallel
+ports `11500–11509` are a TUI-only feature.
 
 ## Use
 
@@ -157,7 +172,8 @@ prompt. **Advanced settings** — every `mlx_vlm` flag (`--kv-bits`,
 
 ## Updates
 
-marv-mlx checks GitHub for a newer version at every launch; when one exists a
+marv-mlx checks GitHub for a newer version at every interactive (TUI) launch;
+when one exists a
 `▲ Update available: X.Y.Z → A.B.C` banner appears and the menu gains an
 **Update to latest version** entry that pulls and reinstalls in place (a
 pi-managed install instead guides you to `pi update`; a curl/managed copy is
