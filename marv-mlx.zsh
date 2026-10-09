@@ -68,45 +68,16 @@ marv-mlx() {
 
   mkdir -p "$state_dir" "$log_dir" "$chat_dir"
 
-  # The curated download list lives in the standalone marv-curator repo; pull
-  # the latest copy at startup and cache it. Retry a few times, then fall back
-  # to the github.com mirror, and only if both fail use the last cached copy.
-  local curated_url="https://raw.githubusercontent.com/pavsefcik/marv-curator/main/marv-curator.md"
-  local curated_mirror="https://github.com/pavsefcik/marv-curator/raw/main/marv-curator.md"
-  local curated_file="$state_dir/curated-llms.md"
-  local curated_tmp="$curated_file.tmp" curated_refreshed=0 attempt
-  # CLI verbs that don't need the Download menu skip the fetch entirely, so they
-  # stay fast and work offline (status/list/info/stop/chat/run/…) before dispatch.
-  # `curated` is deliberately absent: it IS the catalog command, so it wants the
-  # fresh list (and falls back to the cache offline).
-  local _MARV_MLX_NEEDS_CURATED=1
-  case "${1:-}" in
-    status|list|ls|info|endpoint|stop|run|serve|chat|download|version|-v|--version|-V|help|-h|--help) _MARV_MLX_NEEDS_CURATED=0 ;;
-  esac
-  if (( _MARV_MLX_NEEDS_CURATED )); then
-  for attempt in 1 2 3; do
-    if curl -fsSL --connect-timeout 8 --max-time 20 "$curated_url" -o "$curated_tmp" 2>/dev/null \
-       && [[ -s "$curated_tmp" ]]; then
-      mv "$curated_tmp" "$curated_file"
-      curated_refreshed=1
-      break
-    fi
-  done
-  if (( curated_refreshed == 0 )); then
-    if curl -fsSL --connect-timeout 8 --max-time 20 "$curated_mirror" -o "$curated_tmp" 2>/dev/null \
-       && [[ -s "$curated_tmp" ]]; then
-      mv "$curated_tmp" "$curated_file"
-      curated_refreshed=1
-    fi
+  # The curated download list is bundled in this repo (`curated-llms.md`) — the
+  # hand-picked catalog that used to live in the separate marv-curator repo. A
+  # `MARV_MLX_CATALOG` override points elsewhere (tests, custom lists). The
+  # legacy cache path is kept in sync for sibling tools (the marv harness reads
+  # `~/.cache/marv/mlx/curated-llms.md`) whenever the bundled list changes.
+  local curated_file="${MARV_MLX_CATALOG:-$_MARV_MLX_SRC_DIR/curated-llms.md}"
+  local curated_cache="$state_dir/curated-llms.md"
+  if [[ -r "$curated_file" ]] && ! cmp -s "$curated_file" "$curated_cache"; then
+    cp -f "$curated_file" "$curated_cache" 2>/dev/null || true
   fi
-  if (( curated_refreshed == 0 )); then
-    [[ -f "$curated_file" ]] || : > "$curated_file"
-    if (( $# == 0 )); then
-      print -u2 "marv-mlx: couldn't refresh the curated model list — using the cached copy."
-    fi
-  fi
-  fi  # _MARV_MLX_NEEDS_CURATED
-  rm -f "$curated_tmp"
 
   _marv_mlx_write_default_config() {
     cat > "$1" <<'CFG'
@@ -699,7 +670,7 @@ export HF_HUB_DISABLE_SHARED_BLOBS=1
   _marv_mlx_download_menu() {
     local ram_gb=$(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1073741824 ))
     local tier_active
-    # Tiers in marv-curator.md are 8 / 16 / 32 GB; show only the machine's own
+    # Tiers in curated-llms.md are 8 / 16 / 32 GB; show only the machine's own
     # tier (no cross-tier models and no tier-header lines).
     if (( ram_gb >= 32 )); then
       tier_active=32
@@ -1874,8 +1845,7 @@ PY
 
   # Self-update notice: compare the installed version (VERSION file next to this
   # script) with the latest on GitHub. Interactive menu only — headless runs
-  # (run/stop/status) skip the network call. Short timeout, mirrors the
-  # curated-list fetch; offline = no banner.
+  # (run/stop/status) skip the network call. Short timeout; offline = no banner.
   _marv_mlx_check_update() {
     (( $# == 0 )) || return 0
     local installed="$(<"$_MARV_MLX_SRC_DIR/VERSION" 2>/dev/null | tr -d '[:space:]')"
@@ -2183,8 +2153,8 @@ PY
       if (( c_tier[i] != in_tier )); then
         in_tier=${c_tier[$i]}
         # The header text comes verbatim from the catalog source ("8 GB RAM
-        # Tier Models"), so curator repo wording changes show through as-is;
-        # only fall back to a synthesized label when the source had no header.
+        # Tier Models"), so catalog wording changes show through as-is; only
+        # fall back to a synthesized label when the source had no header.
         printf '\n%s%s%s\n' "$pink" \
           "${c_tname[$i]:-${in_tier} GB RAM Tier Models}" "$off"
       fi

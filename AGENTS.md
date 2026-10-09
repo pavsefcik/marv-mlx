@@ -12,16 +12,21 @@ models in-pi and runs a headless `marv-mlx run`.
 
 ## Repos involved
 
-- `pavsefcik/marv-mlx` — this repo (zsh TUI + `install.sh` + Homebrew formula source).
-- `pavsefcik/marv-curator` — `marv-curator.md`, the hand-picked download catalog
-  (blank-line-separated 2-line blocks: model id then tagline). Consumed by the
-  Download menu. (Older 3-line/flag-titled shapes still parse but are legacy.)
-- `pavsefcik/homebrew-marv-mlx` — the tap; `Formula/marv-mlx.rb` (path `../homebrew-marv-mlx`).
+- `pavsefcik/marv-mlx` — this repo (zsh TUI + `install.sh` + the bundled catalog).
+- `pavsefcik/marv-curator` — **archived.** Its `marv-curator.md` catalog was
+  moved into this repo as `curated-llms.md`; the runtime no longer fetches it.
+  (The `~/.cache/marv/mlx/curated-llms.md` cache is still written for the
+  sibling marv harness, which reads that path.)
+- `pavsefcik/homebrew-marv-mlx` — **archived.** No Homebrew formula/tap ships
+  anymore; use the curl one-liner or `pi install`.
 
 ## Layout
 
 - `marv-mlx.zsh` — the whole TUI (one large file, ~2300 lines / ~85KB). Read it
   in full before wide-ranging edits.
+- `curated-llms.md` — the bundled curated catalog (RAM tier headers +
+  blank-line-separated 2-line id/tagline blocks). Edit this to change the
+  Download menu / `marv-mlx curated`. `MARV_MLX_CATALOG` overrides the path.
 - `marv-mlx-launcher.zsh` — sourced from `~/.zshrc`; provides the `marv-mlx` shell entry.
 - `install.sh` — standalone installer (brew `uv`/`gum`, `mlx-vlm` as a uv tool,
   pi extension + wrapper, wires `~/.zshrc`).
@@ -32,7 +37,8 @@ models in-pi and runs a headless `marv-mlx run`.
 - `scripts/` — one-off migration scripts.
 - `tests/` — Python unittest (`mock_server.py`, `test_integration_repl.py`,
   `test_marv_mlx_repl.py`) + zsh helper tests (`test_helpers.zsh`, `test_cli.zsh`, `test_migration.zsh`).
-- `Makefile` — release tooling.
+- `Makefile` — release tooling (VERSION bump + tag; no Homebrew formula step —
+  the tap is archived).
 
 ## Commands
 
@@ -48,9 +54,9 @@ models in-pi and runs a headless `marv-mlx run`.
   the README's `(semver, currently X.Y.Z)` mention, and ideally the changelog.
 - Standard flow (from `Makefile`): `make release VERSION=X.Y.Z` bumps `VERSION`
   + `package.json`, commits "Release X.Y.Z", tags `vX.Y.Z`; then
-  `git push origin main vX.Y.Z`; then `make formula` to refresh the tap hash.
-  Note: `make commit` stages only `VERSION package.json README.md` — stage the
-  changelog and other changed files separately.
+  `git push origin main vX.Y.Z`. Note: `make commit` stages only
+  `VERSION package.json README.md` — stage the changelog and other changed
+  files separately.
 - Bump the changelog too (CHANGELOG.md) for each release.
 
 ## Installer invariants (do not regress)
@@ -110,8 +116,8 @@ missing).
   This repo uses the noreply email `187490479+pavsefcik@users.noreply.github.com`
   (set repo-locally as `user.email`). Keep using it for commits; don't reintroduce
   the private email.
-- **Flags in the Download menu are a legacy-format artifact.** The live
-  `marv-curator.md` catalog is plain `id` + `tagline` lines (no flags, titles or
+- **Flags in the Download menu are a legacy-format artifact.** The bundled
+  `curated-llms.md` catalog is plain `id` + `tagline` lines (no flags, titles or
   subtitle); only older/legacy blocks carried them. If you see a "glued" flag it
   is cosmetic and irrelevant — the model id always comes from the id line.
 - **Open questions / pending work:** the standalone install on a fresh test

@@ -1,24 +1,17 @@
 # marv-mlx release tooling.
 #
 #   make release              -> bump VERSION, commit, tag vX.Y.Z (local)
-#   make formula              -> rewrite the Homebrew formula sha256/url from the
-#                                actual GitHub tarball (run AFTER pushing the tag)
 #
 # Example flow:
 #   make release VERSION=0.1.0
 #   git push origin main v0.1.0
-#   make formula
-#   (cd ../homebrew-marv-mlx && git add Formula && git commit -m "marv-mlx 0.1.0" && git push)
 SHELL := /bin/bash
 
 VERSION ?= $(shell cat VERSION)
 TAG     := v$(VERSION)
 REPO    := pavsefcik/marv-mlx
-# Sibling checkout of the tap repo (create it with: git init ../homebrew-marv-mlx)
-BREW    := ../homebrew-marv-mlx
-FORMULA := $(BREW)/Formula/marv-mlx.rb
 
-.PHONY: release check bump commit tag info formula test
+.PHONY: release check bump commit tag info test
 
 release: check bump commit tag info
 
@@ -51,21 +44,5 @@ tag:
 	@echo "  git push origin main $(TAG)"
 
 info:
-	@echo "After pushing the tag, refresh the tap formula hash:"
-	@echo "  make formula"
-
-# Recompute the Homebrew formula from the ACTUAL tarball GitHub serves for the
-# current tag. Needs the tag pushed to GitHub first.
-formula:
-	@test -f "$(FORMULA)" || { echo "$(FORMULA) not found"; exit 1; }
-	@test -n "$(TAG)"
-	@curl -fsSL "https://github.com/$(REPO)/archive/refs/tags/$(TAG).tar.gz" \
-		-o "/tmp/marv-mlx-$(TAG).tar.gz"
-	@sha="$$(shasum -a 256 "/tmp/marv-mlx-$(TAG).tar.gz" | awk '{print $$1}')"; \
-	sed -e "s|archive/refs/tags/v[^/]*\.tar\.gz|archive/refs/tags/$(TAG).tar.gz|" \
-	    -e "s|^  sha256 .*|  sha256 \"$$sha\"|" "$(FORMULA)" > "$(FORMULA).tmp" \
-	&& mv "$(FORMULA).tmp" "$(FORMULA)"; \
-	echo "Updated $(FORMULA)"; \
-	echo "  url    -> .../archive/refs/tags/$(TAG).tar.gz"; \
-	echo "  sha256 -> $$sha"; \
-	echo "Commit and push inside $(BREW)."
+	@echo "Release $(VERSION) tagged. Push with:"
+	@echo "  git push origin main $(TAG)"

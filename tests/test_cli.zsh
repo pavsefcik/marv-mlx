@@ -33,13 +33,13 @@ bin="$tmp/bin"
 mkdir -p "$bin"
 for t in gum uvx mlx_vlm.server; do printf '#!/bin/sh\nexit 0\n' > "$bin/$t"; chmod +x "$bin/$t"; done
 # curl always fails fast: the network-using verbs are skipped by design in CLI
-# mode, and the curated-list fallback should not be hit.
+# mode, and the self-update check should not be hit.
 printf '#!/bin/sh\nexit 1\n' > "$bin/curl"; chmod +x "$bin/curl"
 export PATH="$bin:$PATH"
 
-# --- Fixture curated catalog (the curl stub can't fetch the real one) ---------
+# --- Fixture curated catalog (MARV_MLX_CATALOG overrides the bundled one) ------
 mkdir -p "$HOME/.cache/marv/mlx"
-cat > "$HOME/.cache/marv/mlx/curated-llms.md" <<'CATALOG'
+cat > "$tmp/catalog.md" <<'CATALOG'
 8 GB RAM Tier Models
 
 acme/Tiny-4B
@@ -54,6 +54,7 @@ The one that thinks
 acme/Bare-7B
 No tagline here
 CATALOG
+export MARV_MLX_CATALOG="$tmp/catalog.md"
 
 marv-mlx() { zsh "$repo/marv-mlx.zsh" "$@" }   # run the real entry point
 
@@ -96,7 +97,7 @@ out=$(marv-mlx curated 2>/dev/null)
 [[ "$out" == *"The compact generalist"* ]] && print "ok: curated shows taglines" \
   || { print -u2 "FAIL: curated missing tagline"; fail=1 }
 # Tier headers are printed verbatim from the source (not rebuilt from the tier
-# number), so curator-repo wording changes show straight through.
+# number), so catalog wording changes show straight through.
 [[ "$out" == *"8 GB RAM Tier Models"* ]] && print "ok: curated prints tier header verbatim" \
   || { print -u2 "FAIL: curated tier header not verbatim"; print -u2 "$out"; fail=1; }
 [[ "$out" == *"16 GB RAM Tier Models (power users)"* ]] \

@@ -216,7 +216,7 @@ Commands print data on stdout and human logs on stderr, so they compose; pass
 USAGE
 }
 
-# Parse the curated catalog (marv-curator's marv-curator.md) into flat,
+# Parse the curated catalog (the repo's bundled curated-llms.md) into flat,
 # all-tiers model rows. Emits one US-delimited (\x1f) line per distinct entry:
 #
 #   tier<US>tier_name<US>title<US>ids<US>tags<US>description

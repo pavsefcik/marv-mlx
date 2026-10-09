@@ -51,26 +51,8 @@ Installs to `~/.marv-mlx` (`MARV_MLX_DIR` to override) and wires the launcher in
 curl -fsSL https://raw.githubusercontent.com/pavsefcik/marv-mlx/main/install.sh | sh
 ```
 
-### Standalone — Homebrew (tap)
-
-```sh
-brew install pavsefcik/marv-mlx/marv-mlx
-```
-
-One line on any Homebrew version. Homebrew ≥ 6 auto-trusts exactly this
-formula on a fully-qualified install, so there's no separate tap/trust step.
-For the shorter `marv-mlx` name (tapped + trusted):
-
-```sh
-brew trust pavsefcik/marv-mlx   # Homebrew 6+ only: taps are executable Ruby, so they need explicit trust
-brew tap pavsefcik/marv-mlx
-brew install marv-mlx
-```
-
-The formula brings `gum` + `uv`; run
-`sh "$(brew --prefix)/opt/marv-mlx/libexec/install.sh"` once — it installs the
-`mlx-vlm` tool and adds the launcher to `~/.zshrc`. Then open a new terminal
-and run `marv-mlx`.
+Homebrew is not supported (the tap is archived) — use the curl one-liner above
+or the repo checkout.
 
 ## Run
 
@@ -153,8 +135,8 @@ ports `11500–11509` are a TUI-only feature.
   returns. `s` or
   `/` searches across all chats, `o` opens the chat folder. Deleted chats are
   gone for good (no trash).
-- Download from a curated list ([marv-curator](https://github.com/pavsefcik/marv-curator),
-  filtered to your RAM tier) or paste any HuggingFace id
+- Download from the bundled curated list (filtered to your RAM tier) or paste
+  any HuggingFace id
 - Ministral models are shipped as Instruct+Reasoning pairs: downloading a
   Ministral entry fetches both halves, the menu shows a single
   `Ministral-3-xB-4bit` entry, and `tab` swaps between the Instruct and

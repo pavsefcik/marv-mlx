@@ -2,7 +2,20 @@
 
 All notable changes to marv-mlx are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/). Version numbers are kept in
-sync across `VERSION`, `package.json`, the Homebrew formula, and the README.
+sync across `VERSION`, `package.json`, and the README.
+
+## [Unreleased]
+
+### Changed
+- **The curated catalog is bundled in this repo again.** `curated-llms.md`
+  (formerly `marv-curator`'s `marv-curator.md`) now ships with marv-mlx, so the
+  Download menu no longer fetches a list from a separate GitHub repo at startup
+  — it works offline out of the box. `MARV_MLX_CATALOG` overrides the path. The
+  legacy cache (`~/.cache/marv/mlx/curated-llms.md`) is still kept in sync for
+  the sibling marv harness, which reads that path.
+- **Dropped the Homebrew formula/tap.** `pavsefcik/homebrew-marv-mlx` is
+  archived; install with the curl one-liner or `pi install`. `make formula` and
+  the `BREW`/`FORMULA` Makefile targets are gone.
 
 ## [0.136.3] - 2026-10-07
 
@@ -48,7 +61,9 @@ sync across `VERSION`, `package.json`, the Homebrew formula, and the README.
   - state: `~/.cache/ymlx` → `~/.cache/marv/mlx`; install dir `~/.marv-mlx`;
     stable pi copy `~/.local/share/marv-mlx`; wrapper `~/.pi/agent/bin/marv-mlx`
   - Homebrew formula/tap: `Formula/marv-mlx.rb`, tap `pavsefcik/marv-mlx`
-  - curated catalog: `pavsefcik/marv-curator` (`marv-curator.md`)
+    (now dropped; the tap is archived)
+  - curated catalog: `pavsefcik/marv-curator` (`marv-curator.md`) — now bundled
+    here as `curated-llms.md`; the curator repo is archived
 - **One-time state migration (`lib/marv-mlx-helpers.zsh`).** On first launch,
   `~/.cache/ymlx` is copied to `~/.cache/marv/mlx` (target-absent guard, never
   destructive), the managed-block markers and `YMLX_QUICK_*` names in
