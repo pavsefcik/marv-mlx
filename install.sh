@@ -7,9 +7,6 @@
 #   2. From a git clone / checkout:
 #        git clone https://github.com/pavsefcik/marv-mlx && sh marv-mlx/install.sh
 #
-#   3. From a brew-installed copy (one-off runtime setup):
-#        sh "$(brew --prefix)/opt/marv-mlx/libexec/install.sh"
-#
 # It installs the tools marv-mlx needs (uv and gum via Homebrew, mlx-vlm as a uv
 # tool), materializes the repo into a stable directory when it isn't already a
 # checkout, wires the pi extension + wrapper, and sources the `marv-mlx` launcher
@@ -32,9 +29,9 @@ says() { printf '    %s\n' "$1"; }
 die()  { printf 'install.sh: %s\n' "$1" >&2; exit 1; }
 
 # ---- Resolve the marv-mlx source/working directory ------------------------------
-# If we're running from a real script that sits next to marv-mlx.zsh (a clone or a
-# brew libexec), use that dir so the paths baked into the launcher/wrapper are
-# stable. Otherwise (piped via curl, no checkout present) materialize a copy
+# If we're running from a real script that sits next to marv-mlx.zsh (a clone),
+# use that dir so the paths baked into the launcher/wrapper are stable.
+# Otherwise (piped via curl, no checkout present) materialize a copy
 # into $MARV_MLX_DIR.
 self_dir="$(dirname "$0" 2>/dev/null)"
 if [ -n "$self_dir" ] && [ -f "$self_dir/marv-mlx.zsh" ]; then

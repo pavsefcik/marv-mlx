@@ -14,8 +14,9 @@
  * Commands:
  *   /marv-mlx-sync   re-scan the HF hub cache and re-register the "local" provider
  *   /marv-mlx-setup  install/repair marv-mlx + deps (uv, gum, mlx-vlm via brew) and wire
- *                pi → marv-mlx: copy marv-mlx.zsh to ~/.local/share/marv-mlx (a stable dir,
- *                because pi resets git-package checkouts on update) and write the
+ *                pi → marv-mlx: copy marv-mlx.zsh (+ lib, curated-llms.md) to
+ *                ~/.local/share/marv-mlx (a stable dir, because pi resets
+ *                git-package checkouts on update) and write the
  *                ~/.pi/agent/bin/marv-mlx wrapper. Also offered automatically on
  *                session start when marv-mlx isn't wired in yet.
  *
@@ -265,6 +266,11 @@ async function wireMarvMlx(ui: SetupUI): Promise<boolean> {
         join(dirname(zsh), "lib", "marv_mlx_repl.py"),
         join(MARV_MLX_STABLE, "lib", "marv_mlx_repl.py")
       );
+      // Bundled curated catalog (the Download menu / `marv-mlx curated`).
+      await copyFile(
+        join(dirname(zsh), "curated-llms.md"),
+        join(MARV_MLX_STABLE, "curated-llms.md")
+      ).catch(() => {});
       // Version lives next to marv-mlx.zsh (self-update notice reads it); best-effort.
       await copyFile(
         join(dirname(zsh), "VERSION"),
