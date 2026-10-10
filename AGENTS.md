@@ -7,7 +7,7 @@ session and follow it). Keep answers short and direct; no emojis in commits.
 
 **marv-mlx** is a zsh TUI for browsing, running and downloading local MLX LLMs on
 Apple Silicon, exposing a drop-in OpenAI-compatible endpoint at
-`localhost:11500`. It also ships as a pi extension (`marv-mlx-sync`) that syncs/selects
+`localhost:11500`. It also ships as a pi extension (`marv-mlx`) that syncs/selects
 models in-pi and runs a headless `marv-mlx run`.
 
 ## Repos involved
@@ -32,7 +32,7 @@ models in-pi and runs a headless `marv-mlx run`.
   pi extension + wrapper, wires `~/.zshrc`).
 - `lib/` — `marv_mlx_repl.py` (chat REPL), `marv-mlx-helpers.zsh`, `sitecustomize.py`
   (setproctitle for process renaming).
-- `extensions/marv-mlx-sync.ts` — pi extension (symlinked/copied into
+- `extensions/marv-mlx.ts` — pi extension (symlinked/copied into
   `~/.pi/agent/extensions/`).
 - `scripts/` — one-off migration scripts.
 - `tests/` — Python unittest (`mock_server.py`, `test_integration_repl.py`,
@@ -94,7 +94,7 @@ missing).
 
 ## Known pitfalls
 
-- **`extensions/marv-mlx-sync.ts` diverges from `install.sh`.** The pi-managed
+- **`extensions/marv-mlx.ts` diverges from `install.sh`.** The pi-managed
   setup installs `uv tool install mlx-vlm --with jinja2` (unpinned, no
   `--force`, no shim), appends `$HOME/.local/bin` to `~/.zshrc` directly, and
   copies only `marv-mlx.zsh` + `lib/marv-mlx-helpers.zsh` + `lib/marv_mlx_repl.py`

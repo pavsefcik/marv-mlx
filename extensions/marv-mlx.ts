@@ -1,5 +1,5 @@
 /**
- * marv-mlx-sync — keeps pi's list of local MLX models in sync with what's actually
+ * marv-mlx — keeps pi's list of local MLX models in sync with what's actually
  * downloaded in the Hugging Face hub cache, and starts/switches marv-mlx to the
  * selected local model on :11500.
  *
@@ -7,7 +7,7 @@
  *
  *   pi install git:github.com/pavsefcik/marv-mlx
  *
- * or copied into ~/.pi/agent/extensions/marv-mlx-sync.ts — `sh install.sh` from a
+ * or copied into ~/.pi/agent/extensions/marv-mlx.ts — `sh install.sh` from a
  * clone does the copy and generates the ~/.pi/agent/bin/marv-mlx wrapper for you.
  * Hot-reload with /reload. The factory runs on every pi start and /reload.
  *

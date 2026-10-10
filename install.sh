@@ -180,11 +180,11 @@ done
 # ---- 7. pi integration — extension + wrapper ---------------------------------
 step "Installing pi extension + wrapper…"
 mkdir -p "$HOME/.pi/agent/extensions" "$HOME/.pi/agent/bin"
-if [ -f "$repo_dir/extensions/marv-mlx-sync.ts" ]; then
-  cp -f "$repo_dir/extensions/marv-mlx-sync.ts" "$HOME/.pi/agent/extensions/marv-mlx-sync.ts"
-  says "extension -> ~/.pi/agent/extensions/marv-mlx-sync.ts"
+if [ -f "$repo_dir/extensions/marv-mlx.ts" ]; then
+  cp -f "$repo_dir/extensions/marv-mlx.ts" "$HOME/.pi/agent/extensions/marv-mlx.ts"
+  says "extension -> ~/.pi/agent/extensions/marv-mlx.ts"
 else
-  says "SKIP: extensions/marv-mlx-sync.ts not found — is this a full checkout of the repo?"
+  says "SKIP: extensions/marv-mlx.ts not found — is this a full checkout of the repo?"
 fi
 cat > "$HOME/.pi/agent/bin/marv-mlx" <<EOF_MARV_MLX
 #!/usr/bin/env bash
@@ -206,7 +206,7 @@ EOF_YMLX
 chmod +x "$HOME/.pi/agent/bin/ymlx"
 says "deprecation stub -> ~/.pi/agent/bin/ymlx (forwards to marv-mlx)"
 if command -v pi >/dev/null 2>&1; then
-  says "pi found — run /reload inside pi to activate marv-mlx-sync (or /marv-mlx-setup to repair)"
+  says "pi found — run /reload inside pi to activate marv-mlx (or /marv-mlx-setup to repair)"
 else
   says "pi not found — install it with: npm i -g @earendil-works/pi-coding-agent"
 fi

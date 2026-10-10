@@ -101,7 +101,7 @@ curl -s http://127.0.0.1:11500/v1/chat/completions \
 ```
 
 Machine-readable output (`--json`) and a stable exit-code contract — `0` ok,
-`1` failure, `2` usage error — make marv-mlx safe to drive from the `marv-mlx-sync` pi
+`1` failure, `2` usage error — make marv-mlx safe to drive from the `marv-mlx` pi
 extension or your own tooling. Two edge cases are part of that contract:
 
 - `status --json` when nothing is running prints `null` **and exits 1** (idle is

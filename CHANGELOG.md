@@ -7,6 +7,13 @@ sync across `VERSION`, `package.json`, and the README.
 ## [Unreleased]
 
 ### Changed
+- **The pi extension was renamed `marv-mlx-sync.ts` → `marv-mlx.ts`.** The file
+  is now `extensions/marv-mlx.ts` and `install.sh` copies it to
+  `~/.pi/agent/extensions/marv-mlx.ts`. The slash commands (`/marv-mlx-sync`,
+  `/marv-mlx-setup`) and everything else are unchanged. Existing installs get
+  the new file on `pi update --extensions` / a re-run of `install.sh`; the old
+  `marv-mlx-sync.ts` copy in `~/.pi/agent/extensions/` should be deleted once
+  the new one is in place (pi will otherwise load both).
 - **The curated catalog is bundled in this repo again.** `curated-llms.md`
   (formerly `marv-curator`'s `marv-curator.md`) now ships with marv-mlx, so the
   Download menu no longer fetches a list from a separate GitHub repo at startup
