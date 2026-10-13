@@ -67,6 +67,58 @@ _marv_mlx_apply_launch_thinking flags acme/Qwen3.5-9B "$hub"
 check "0" "$(( ${flags[(I)--enable-thinking]} > 0 ))" "qwen default: stale flag dropped"
 check "0" "$(( ${flags[(I)--thinking-start-token]} > 0 ))" "qwen: no bracket markers"
 
+# --- APC (Automatic Prefix Caching) env defaults ------------------------------
+# mlx-vlm leaves prefix caching off by default; the helper turns it on and must
+# respect pre-set values / the MARV_MLX_APC opt-out without mutating the caller.
+apc() { # extra zsh to run before the helper; prints ENABLED|DISK_PATH|INTERVAL|MAXGB
+  (
+    unset APC_ENABLED APC_DISK_ENABLED APC_DISK_PATH APC_DISK_MAX_GB \
+          APC_CHECKPOINT_INTERVAL_TOKENS APC_CHECKPOINT_ENTRIES MARV_MLX_APC
+    eval "$1"
+    _marv_mlx_export_apc_env /tmp/marv-apc-state
+    print -r -- "${APC_ENABLED:-}|${APC_DISK_PATH:-}|${APC_CHECKPOINT_INTERVAL_TOKENS:-}|${APC_DISK_MAX_GB:-}"
+  )
+}
+check '1|/tmp/marv-apc-state/apc|512|5' "$(apc '')" "apc: defaults exported"
+check '|||' "$(apc 'MARV_MLX_APC=0')" "apc: MARV_MLX_APC=0 opts out"
+check '0|/tmp/marv-apc-state/apc|1024|5' \
+  "$(apc 'APC_ENABLED=0; APC_CHECKPOINT_INTERVAL_TOKENS=1024')" \
+  "apc: existing env respected"
+
+# --- APC sitecustomize (covers foreign launches too) --------------------------
+# The payload defaults the APC env at interpreter startup, so servers launched
+# by ANY tool (marv's embedded launch spawns mlx_vlm.server directly) get
+# prefix caching; the installer that drops it into the tool env must be
+# idempotent and never touch a foreign sitecustomize.
+apc_src="${0:A:h}/../lib/marv-mlx-apc-sitecustomize.py"
+mkdir -p "$hub/apc-sp"
+cp "$apc_src" "$hub/apc-sp/sitecustomize.py"
+apc_py() { # extra zsh before launch; prints ENABLED|INTERVAL|MAXGB
+  (
+    unset APC_ENABLED APC_DISK_ENABLED APC_DISK_PATH APC_DISK_MAX_GB \
+          APC_CHECKPOINT_INTERVAL_TOKENS APC_CHECKPOINT_ENTRIES MARV_MLX_APC
+    eval "$1"
+    PYTHONPATH="$hub/apc-sp" python3 -c \
+      'import os; print("|".join(os.environ.get(k, "-") for k in ("APC_ENABLED", "APC_CHECKPOINT_INTERVAL_TOKENS", "APC_DISK_MAX_GB")))'
+  )
+}
+check '1|512|5' "$(apc_py '')" "apc sitecustomize: defaults at startup"
+check '-|-|-' "$(apc_py 'export MARV_MLX_APC=0')" "apc sitecustomize: MARV_MLX_APC=0 opts out"
+check '0|-|-' "$(apc_py 'export APC_ENABLED=0')" "apc sitecustomize: APC_ENABLED=0 opts out"
+check '1|2048|5' "$(apc_py 'export APC_CHECKPOINT_INTERVAL_TOKENS=2048')" "apc sitecustomize: preset env wins"
+
+# Installer: installs into a tools-dir fixture, idempotent, foreign-safe.
+mkdir -p "$hub/apc-tools/mlx-vlm/lib/python3.13/site-packages"
+sp_dir="$hub/apc-tools/mlx-vlm/lib/python3.13/site-packages"
+_marv_mlx_install_apc_sitecustomize "$apc_src" "$hub/apc-tools"
+check '1' "$([[ -f "$sp_dir/sitecustomize.py" ]] && echo 1)" "apc installer: installs sitecustomize"
+check '1' "$(cmp -s "$apc_src" "$sp_dir/sitecustomize.py" && echo 1)" "apc installer: content matches payload"
+_marv_mlx_install_apc_sitecustomize "$apc_src" "$hub/apc-tools"
+check '1' "$(cmp -s "$apc_src" "$sp_dir/sitecustomize.py" && echo 1)" "apc installer: re-run is idempotent"
+print -r -- 'import something_else  # not ours' > "$sp_dir/sitecustomize.py"
+_marv_mlx_install_apc_sitecustomize "$apc_src" "$hub/apc-tools" 2>/dev/null
+check 'import something_else  # not ours' "$(<"$sp_dir/sitecustomize.py")" "apc installer: leaves foreign sitecustomize alone"
+
 # --- CLI plumbing helpers -----------------------------------------------------
 # `filters` / `replace` stand in for a hub dir listing: they let us exercise
 # _marv_mlx_json_escape without touching the filesystem.

@@ -147,6 +147,31 @@ prune_tool_bloat() {
 prune_tool_bloat
 says "pruned unused data-science deps (datasets/pandas/pyarrow)"
 
+# --- 4c. APC sitecustomize (prefix caching ON for any launcher) ----------------
+# mlx-vlm 0.7.4 ships Automatic Prefix Caching (APC) but leaves it off by
+# default, and mlx_vlm.server has no CLI flag for it — the environment is the
+# only switch. marv-mlx exports the APC_* env for its own launches; this
+# additionally defaults it on INSIDE the tool env (sitecustomize.py runs at
+# interpreter startup) so servers launched by other tools — the marv
+# harness's embedded launch, a manual mlx_vlm.server call — also get prefix
+# caching. setdefault semantics: explicit APC_ENABLED=0 / MARV_MLX_APC=0 wins.
+apc_src="$repo_dir/lib/marv-mlx-apc-sitecustomize.py"
+if [ -r "$apc_src" ]; then
+  for sp in "$UV_TOOL_DIR"/mlx-vlm/lib/python*/site-packages; do
+    [ -d "$sp" ] || continue
+    if [ -f "$sp/sitecustomize.py" ] \
+       && ! grep -q "marv-mlx APC sitecustomize" "$sp/sitecustomize.py" 2>/dev/null; then
+      says "foreign sitecustomize.py in $sp — left untouched (APC defaults not installed)"
+      continue
+    fi
+    if ! cmp -s "$apc_src" "$sp/sitecustomize.py" 2>/dev/null; then
+      cp -f "$apc_src" "$sp/sitecustomize.py" \
+        || die "could not write $sp/sitecustomize.py"
+      says "APC sitecustomize installed in $sp (prefix caching on for any launcher)"
+    fi
+  done
+fi
+
 # ---- 5. Make sure uv's tool bin dir is on PATH ------------------------------------
 # Don't assume ~/.local/bin: uv's tool executable dir is configurable (UV_TOOL_BIN_DIR,
 # XDG_BIN_HOME, XDG_DATA_HOME) and defaults to the first resolution on that list before

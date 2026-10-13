@@ -6,6 +6,30 @@ sync across `VERSION`, `package.json`, and the README.
 
 ## [Unreleased]
 
+### Fixed
+- **Every chat turn re-prefilled the whole conversation (~5k tokens, ~30s).**
+  mlx-vlm 0.7.4 ships Automatic Prefix Caching (APC) but leaves it off by
+  default (`APC_ENABLED=0`), and `mlx_vlm.server` exposes no CLI flag for it, so
+  the server log showed `cached_tokens=0` on every request. marv-mlx now exports
+  `APC_ENABLED=1` (plus a state-local disk cache cap and a 512-token checkpoint
+  interval for hybrid models) right before launching the server, in both the TUI
+  (`_marv_mlx_launch`) and `marv-mlx run` (`_marv_mlx_headless_launch`). Hybrid
+  models like Qwen3.5 use APC's checkpoint (`mode=exact`) path automatically.
+  Verified against `ornith-ai/Ornith-1.5-9B-MLX-4bit`: turn 2 reused 429/452
+  prompt tokens and prefill dropped from 1.8s to 0.26s. Set `MARV_MLX_APC=0` in
+  `config.zsh` to opt out.
+- **Prefix caching now also covers servers marv-mlx doesn't launch itself.**
+  The marv harness's *embedded* launch spawns `mlx_vlm.server` directly from
+  the uv tool env, bypassing marv-mlx's launch path — so its server also ran
+  with `cached_tokens=0` every turn. marv-mlx now installs a small
+  `sitecustomize.py` (from `lib/marv-mlx-apc-sitecustomize.py`) into the
+  mlx-vlm tool env's site-packages: it runs at interpreter startup and
+  defaults the same `APC_*` variables on with `setdefault`, so *any* launcher
+  (marv embedded, a manual `mlx_vlm.server`, marv-mlx) gets prefix caching.
+  Installed by `install.sh` (step 4c) and `/marv-mlx-setup`, self-healed on
+  every marv-mlx startup (a `uv tool update` drops it). Explicit env still
+  wins; `APC_ENABLED=0` / `MARV_MLX_APC=0` opts out.
+
 ### Changed
 - **The pi extension was renamed `marv-mlx-sync.ts` → `marv-mlx.ts`.** The file
   is now `extensions/marv-mlx.ts` and `install.sh` copies it to
@@ -20,6 +44,12 @@ sync across `VERSION`, `package.json`, and the README.
   — it works offline out of the box. `MARV_MLX_CATALOG` overrides the path. The
   legacy cache (`~/.cache/marv/mlx/curated-llms.md`) is still kept in sync for
   the sibling marv harness, which reads that path.
+- **Quitting no longer force-stops running models.** The quit prompt is a
+  three-way menu — *Stop all models & quit*, *Quit, leave models running*,
+  *Cancel* — instead of a yes/no confirm. Choosing *leave models running*
+  detaches the session's server PIDs (so the exit trap doesn't stop them) and
+  the sign-off reports it: `models still running — 'marv-mlx stop --all' to stop
+  them`. *Cancel* returns to the TUI.
 - **Dropped the Homebrew formula/tap.** `pavsefcik/homebrew-marv-mlx` is
   archived; install with the curl one-liner or `pi install`. `make formula` and
   the `BREW`/`FORMULA` Makefile targets are gone.

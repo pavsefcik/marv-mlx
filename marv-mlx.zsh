@@ -131,6 +131,19 @@ MARV_MLX_SERVER_FLAGS=(
   # --trust-remote-code
   # --log-level INFO
 )
+
+# Automatic Prefix Caching (APC): marv-mlx enables mlx-vlm's prefix cache so a
+# new turn only prefills the new tokens instead of the whole conversation.
+# mlx_vlm.server has no CLI flag for this, so these are environment variables
+# exported right before the server starts. Uncomment to override a default, or
+# set MARV_MLX_APC=0 to disable APC entirely.
+# APC_ENABLED=1
+# APC_DISK_ENABLED=1
+# APC_DISK_PATH="$HOME/.cache/marv/mlx/apc"
+# APC_DISK_MAX_GB=5
+# APC_NUM_BLOCKS=2048
+# APC_CHECKPOINT_INTERVAL_TOKENS=512
+# APC_CHECKPOINT_ENTRIES=2
 CFG
   }
 
@@ -141,6 +154,7 @@ CFG
   typeset -g _MARV_MLX_TMP_CFG=""
   typeset -g _MARV_MLX_STTY_SAVED=""
   typeset -g _MARV_MLX_MENU_QUIT=0
+  typeset -gi _MARV_MLX_BYE_LEFT_RUNNING=0
   typeset -gi _MARV_MLX_HF_SKIPPED=0
   typeset -g _MARV_MLX_MENU_KEY=""
   typeset -ga _MARV_MLX_MENU_LINES=()
@@ -476,6 +490,12 @@ CFG
   [[ -f "$config_file" ]] || _marv_mlx_write_default_config "$config_file"
   _marv_mlx_reload_config
 
+  # Self-heal the APC sitecustomize in the mlx-vlm uv tool env: a
+  # `uv tool update` reinstalls the env and drops it. With it in place, every
+  # server launch — marv-mlx's or a foreign one (the marv harness's embedded
+  # launch, a manual mlx_vlm.server call) — defaults prefix caching on.
+  _marv_mlx_install_apc_sitecustomize "$_MARV_MLX_SRC_DIR/lib/marv-mlx-apc-sitecustomize.py"
+
 #
 # HuggingFace token handling. mlx-vlm downloads models from the HF Hub; without
 # a token it warns "sending unauthenticated requests". These helpers expose an
@@ -601,6 +621,9 @@ export HF_HUB_DISABLE_SHARED_BLOBS=1
     local log="$log_dir/${safe}-${port}.log"
     local -a launch_flags=( "${MARV_MLX_SERVER_FLAGS[@]}" )
     _marv_mlx_apply_launch_thinking launch_flags "$model" "$hub_dir"
+    # Prefix caching: without this the server re-prefills the whole
+    # conversation every turn (mlx-vlm leaves APC off by default).
+    _marv_mlx_export_apc_env "$state_dir"
     # MARV_MLX_PROCTITLE + PYTHONPATH make the server rename itself to the model
     # name in Activity Monitor / ps (see lib/sitecustomize.py).
     MARV_MLX_PROCTITLE="$model" PYTHONPATH="$_MARV_MLX_SRC_DIR/lib${PYTHONPATH:+:$PYTHONPATH}" \
@@ -1709,11 +1732,24 @@ PY
 
   _marv_mlx_main_quit() {
     _marv_mlx_main_clear
-    if gum confirm "Quit marv-mlx and stop all running models?"; then
-      _marv_mlx_stop_all >/dev/null 2>&1
-      _MARV_MLX_MENU_QUIT=1
-      return 0
-    fi
+    local choice
+    choice=$(printf 'Stop all models & quit\nQuit, leave models running\nCancel' | gum choose --header "Quit marv-mlx?" --height 6)
+    case "$choice" in
+      "Stop all models & quit")
+        _marv_mlx_stop_all >/dev/null 2>&1
+        _MARV_MLX_MENU_QUIT=1
+        return 0
+        ;;
+      "Quit, leave models running")
+        # Detach any servers started this session so the EXIT trap doesn't stop
+        # them: they keep serving on their ports after marv-mlx exits.
+        _MARV_MLX_SESSION_PIDS=()
+        _MARV_MLX_BYE_STOPPED=0
+        _MARV_MLX_BYE_LEFT_RUNNING=1
+        _MARV_MLX_MENU_QUIT=1
+        return 0
+        ;;
+    esac
     _marv_mlx_main_full_render
     return 1
   }
@@ -1884,6 +1920,9 @@ PY
     local log="$log_dir/${safe}-${port}.log"
     local -a launch_flags=( "${MARV_MLX_SERVER_FLAGS[@]}" )
     _marv_mlx_apply_launch_thinking launch_flags "$model" "$hub_dir"
+    # Prefix caching: without this the server re-prefills the whole
+    # conversation every turn (mlx-vlm leaves APC off by default).
+    _marv_mlx_export_apc_env "$state_dir"
     # Rename this server to the model name in Activity Monitor / ps (see
     # lib/sitecustomize.py), so heads-up monitoring shows which model is up.
     MARV_MLX_PROCTITLE="$model" PYTHONPATH="$_MARV_MLX_SRC_DIR/lib${PYTHONPATH:+:$PYTHONPATH}" \
@@ -2247,6 +2286,7 @@ PY
     print -n -- $'\e[2J\e[H'   # fresh screen: the sign-off sits at the very top
     local msg="▌▌ marv-mlx says bye!"
     (( ${_MARV_MLX_BYE_STOPPED:-0} > 0 )) && msg+="  (stopped ${_MARV_MLX_BYE_STOPPED} running model(s))"
+    (( ${_MARV_MLX_BYE_LEFT_RUNNING:-0} )) && msg+="  (models still running — 'marv-mlx stop --all' to stop them)"
     gum style --foreground 212 --bold "$msg"
   }
 

@@ -169,6 +169,62 @@ async function ensureLocalBinOnPath(ui: SetupUI): Promise<void> {
 }
 
 /**
+ * Install the APC sitecustomize into the mlx-vlm uv tool env so prefix caching
+ * is on for every server launch from that env, whatever launched it.
+ * Idempotent (content-compare); a foreign sitecustomize.py is left untouched.
+ */
+async function installApcSitecustomize(ui: SetupUI): Promise<void> {
+  const marker = "marv-mlx APC sitecustomize";
+  const zsh = await findMarvMlxZsh();
+  const src = zsh
+    ? join(dirname(zsh), "lib", "marv-mlx-apc-sitecustomize.py")
+    : join(MARV_MLX_STABLE, "lib", "marv-mlx-apc-sitecustomize.py");
+  if (!(await pathOk(src))) return;
+
+  let toolsDir: string;
+  try {
+    toolsDir = (await execFileP("uv", ["tool", "dir"])).stdout.trim();
+  } catch {
+    toolsDir = join(homedir(), ".local", "share", "uv", "tools");
+  }
+  const libDir = join(toolsDir, "mlx-vlm", "lib");
+  let sp: string | undefined;
+  try {
+    for (const name of await readdir(libDir)) {
+      const candidate = join(libDir, name, "site-packages");
+      if (name.startsWith("python") && (await pathOk(candidate))) {
+        sp = candidate;
+        break;
+      }
+    }
+  } catch {
+    return; // no mlx-vlm tool env yet
+  }
+  if (!sp) return;
+
+  const dst = join(sp, "sitecustomize.py");
+  try {
+    let cur: string | undefined;
+    try {
+      cur = await readFile(dst, "utf8");
+    } catch {
+      cur = undefined; // not present yet
+    }
+    if (cur !== undefined && !cur.includes(marker)) {
+      ui.notify(`marv-mlx-setup: foreign sitecustomize.py in ${sp} — left untouched`, "info");
+      return;
+    }
+    const want = await readFile(src, "utf8");
+    if (cur !== want) {
+      await copyFile(src, dst);
+      ui.notify(`marv-mlx-setup: APC sitecustomize installed in ${sp} (prefix caching on for any launcher)`, "info");
+    }
+  } catch (err) {
+    ui.notify(`marv-mlx-setup: APC sitecustomize install failed — ${errMsg(err)}`, "error");
+  }
+}
+
+/**
  * /marv-mlx-setup — idempotent install/repair:
  *   1. Xcode CLT 2. brew 3. uv+gum 4. mlx-vlm+jinja2 (uv tool)
  *   5. PATH fix 6. stable marv-mlx.zsh copy + generated wrapper
@@ -230,6 +286,12 @@ async function runSetup(ui: SetupUI): Promise<void> {
       return;
     }
 
+    // 4b. APC sitecustomize: default mlx-vlm's prefix caching ON inside the
+    //     tool env, so servers launched by ANY tool (marv's embedded launch
+    //     included — it spawns mlx_vlm.server directly, bypassing marv-mlx)
+    //     reuse the conversation KV instead of re-prefilling every turn.
+    await installApcSitecustomize(ui);
+
     // 5. ~/.local/bin on PATH for future shells.
     await ensureLocalBinOnPath(ui);
 
@@ -266,6 +328,12 @@ async function wireMarvMlx(ui: SetupUI): Promise<boolean> {
         join(dirname(zsh), "lib", "marv_mlx_repl.py"),
         join(MARV_MLX_STABLE, "lib", "marv_mlx_repl.py")
       );
+      // APC sitecustomize payload (installed into the mlx-vlm tool env by
+      // installApcSitecustomize below).
+      await copyFile(
+        join(dirname(zsh), "lib", "marv-mlx-apc-sitecustomize.py"),
+        join(MARV_MLX_STABLE, "lib", "marv-mlx-apc-sitecustomize.py")
+      ).catch(() => {});
       // Bundled curated catalog (the Download menu / `marv-mlx curated`).
       await copyFile(
         join(dirname(zsh), "curated-llms.md"),

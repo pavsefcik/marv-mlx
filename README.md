@@ -152,6 +152,15 @@ prompt. **Advanced settings** — every `mlx_vlm` flag (`--kv-bits`,
 `--draft-model`, adapters, extra model slots, …). Everything persists in
 `~/.cache/marv/mlx/config.zsh`.
 
+**Prefix caching** is on by default: marv-mlx enables mlx-vlm's Automatic
+Prefix Caching (`APC_ENABLED=1`) around every server launch, so a new chat turn
+prefills only the tokens added since the last one instead of the whole
+conversation. The server log shows `cached_tokens=N`. It covers servers
+launched by other tools too — the marv harness's embedded launch, a manual
+`mlx_vlm.server` call — via a small `sitecustomize.py` installed into the
+mlx-vlm tool env. Uncomment the `APC_*` knobs in `config.zsh` to tune it, or set
+`MARV_MLX_APC=0` to disable it.
+
 ## Updates
 
 marv-mlx checks GitHub for a newer version at every interactive (TUI) launch;

@@ -448,6 +448,70 @@ _marv_mlx_apply_launch_thinking() {
   fi
 }
 
+# _marv_mlx_export_apc_env [state_dir]
+# Export mlx-vlm's Automatic Prefix Caching (APC) switches for the server
+# subprocess. mlx-vlm 0.7.4 ships APC but leaves it off by default, and
+# mlx_vlm.server exposes no --apc flag -- the environment is the only switch.
+# Without it every chat turn re-prefills the whole conversation (the server log
+# shows cached_tokens=0), so long contexts stall on prefill each turn.
+#
+# Pre-set values win, so config.zsh / the shell can override anything. Opt out
+# with MARV_MLX_APC=0 (or APC_ENABLED=0). The disk tier is pointed under
+# marv-mlx's state dir instead of mlx-vlm's global ~/.cache/mlx-vlm/apc.
+_marv_mlx_export_apc_env() {
+  local state_dir="${1:-$HOME/.cache/marv/mlx}"
+  local apc_opt="${MARV_MLX_APC:-1}"
+  case "${apc_opt:l}" in
+    (0|off|false|no) return 0 ;;
+  esac
+  export APC_ENABLED="${APC_ENABLED:-1}"
+  export APC_DISK_ENABLED="${APC_DISK_ENABLED:-1}"
+  export APC_DISK_PATH="${APC_DISK_PATH:-$state_dir/apc}"
+  export APC_DISK_MAX_GB="${APC_DISK_MAX_GB:-5}"
+  # Hybrid models (e.g. Qwen3.5's interleaved linear/full attention) cannot be
+  # prefix-trimmed like plain K/V, so APC restores whole-cache checkpoints at
+  # boundaries. 512 tokens keeps the un-cached suffix short without a large
+  # memory cost; raise it on bigger conversations or lower it for tighter hits.
+  export APC_CHECKPOINT_INTERVAL_TOKENS="${APC_CHECKPOINT_INTERVAL_TOKENS:-512}"
+  export APC_CHECKPOINT_ENTRIES="${APC_CHECKPOINT_ENTRIES:-2}"
+  return 0
+}
+
+# _marv_mlx_install_apc_sitecustomize [src] [tools_dir]
+# Install the APC sitecustomize payload (lib/marv-mlx-apc-sitecustomize.py) into
+# the mlx-vlm uv tool env, so servers launched by ANY tool get prefix caching
+# on — not just marv-mlx's own launches (which already get it via the env above)
+# but also foreign ones: the marv harness's embedded launch and manual
+# `mlx_vlm.server` calls. It runs at interpreter startup (sitecustomize.py) and
+# defaults the same APC_* variables with setdefault, so explicit env still wins.
+#
+# marv-mlx re-runs this on startup: a `uv tool update` reinstalls the tool env
+# and drops the file. Idempotent (content-compare); a sitecustomize.py that is
+# not ours is left untouched.
+_marv_mlx_install_apc_sitecustomize() {
+  local src="${1:-}" tools_dir="${2:-}" sp
+  local marker="marv-mlx APC sitecustomize"
+  [[ -n "$src" ]] || src="${_MARV_MLX_SRC_DIR:-$HOME}/lib/marv-mlx-apc-sitecustomize.py"
+  [[ -r "$src" ]] || return 0
+  if [[ -z "$tools_dir" ]]; then
+    tools_dir="$(uv tool dir 2>/dev/null)"
+    [[ -n "$tools_dir" && -d "$tools_dir" ]] || tools_dir="$HOME/.local/share/uv/tools"
+  fi
+  local -a sps=( "$tools_dir"/mlx-vlm/lib/python*/site-packages(N) )
+  for sp in "${sps[@]}"; do
+    [[ -d "$sp" ]] || continue
+    if [[ -f "$sp/sitecustomize.py" ]] \
+       && ! grep -q "$marker" "$sp/sitecustomize.py" 2>/dev/null; then
+      print -u2 "marv-mlx: foreign sitecustomize.py in $sp — not touching it (APC defaults not installed)"
+      continue
+    fi
+    if ! cmp -s "$src" "$sp/sitecustomize.py" 2>/dev/null; then
+      cp -f "$src" "$sp/sitecustomize.py" 2>/dev/null || continue
+    fi
+  done
+  return 0
+}
+
 # _marv_mlx_purge_orphan_blobs <hub_dir>
 # After a model folder is rm -rf'd, its large weight blobs may still sit in the
 # shared store hub/blobs/{shard}/. This sweeps that store and removes any blob

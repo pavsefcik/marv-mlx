@@ -76,6 +76,12 @@ Step 4 (`install.sh`) is the fragile part. It must:
   a shim at `$UV_TOOL_BIN/mlx_vlm.server` that runs
   `"$UV_TOOL_DIR/mlx-vlm/bin/python" -m mlx_vlm.server "$@"`. The shim must use
   `--force` on later installs so uv can overwrite it cleanly.
+- Step 4c installs `lib/marv-mlx-apc-sitecustomize.py` into the tool env's
+  `site-packages/sitecustomize.py` (defaults APC on for ANY launcher, foreign
+  launches included). A `uv tool update` reinstalls the env and drops it —
+  install.sh re-applies it, and `marv-mlx` startup self-heals via
+  `_marv_mlx_install_apc_sitecustomize`. A `sitecustomize.py` without the
+  `marv-mlx APC sitecustomize` marker is foreign and must be left untouched.
 
 Step 5 wires `$UV_TOOL_BIN` into `~/.zshrc` PATH; step 8 sources
 `marv-mlx-launcher.zsh` from `~/.zshrc`. Both write with `>>` (creates `.zshrc` if
@@ -105,6 +111,21 @@ missing).
 - **`scripts/migrate-shared-blobs.py` is required after enabling
   `HF_HUB_DISABLE_SHARED_BLOBS=1`** (which `marv-mlx.zsh` exports process-wide on
   launch). Run it once to rewrite existing hub blobs.
+- **Prefix caching is opt-in inside mlx-vlm, enabled by marv-mlx.** mlx-vlm
+  0.7.4 ships APC but defaults `APC_ENABLED=0`, and the server has no `--apc`
+  flag. Two layers enable it, both with the same defaults and `setdefault`
+  semantics (explicit env wins; `MARV_MLX_APC=0` / `APC_ENABLED=0` opts out):
+  `_marv_mlx_export_apc_env` (`lib/marv-mlx-helpers.zsh`) exports the env
+  before both server launches (`_marv_mlx_launch` and
+  `_marv_mlx_headless_launch`), and `lib/marv-mlx-apc-sitecustomize.py` is
+  installed into the mlx-vlm **uv tool env's site-packages** as
+  `sitecustomize.py` so foreign launches (the marv harness's embedded launch,
+  manual `mlx_vlm.server`) are covered too. Any new code path that spawns
+  `mlx_vlm.server` must call the helper (or rely on the sitecustomize) or cache
+  hits silently regress to `cached_tokens=0`. Hybrid models (e.g. Qwen3.5:
+  interleaved linear/full attention) use APC's checkpoint (`mode=exact`) path
+  automatically; tune `APC_CHECKPOINT_INTERVAL_TOKENS` if turn suffixes still
+  prefill long.
 - **Hidden global side effects on launch:** `HF_TOKEN` is injected from
   `~/.cache/huggingface/token` and `HF_HUB_DISABLE_SHARED_BLOBS=1` is exported.
 - **raw.githubusercontent.com CDN lags `main`.** After pushing, the one-liner
