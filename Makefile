@@ -64,4 +64,6 @@ doctor:
 	@grep -q 'attempt <= 3' extensions/marv-mlx.ts || { echo "doctor: pi extension retry count drifted from install.sh"; exit 1; }
 	@grep -q 'marv-mlx APC sitecustomize' lib/marv-mlx-apc-sitecustomize.py || { echo "doctor: APC sitecustomize marker missing"; exit 1; }
 	@grep -q -- '-Fpcn' lib/marv-mlx-helpers.zsh || { echo "doctor: lsof field list lost 'n' (live-server guard goes inert)"; exit 1; }
+	@n=$$(grep -c '^## \[Unreleased\]' CHANGELOG.md); \
+	  [ "$$n" -eq 1 ] || { echo "doctor: expected exactly one '## [Unreleased]' heading, found $$n - two writers edited CHANGELOG.md?"; exit 1; }
 	@echo "doctor: installer invariants OK"

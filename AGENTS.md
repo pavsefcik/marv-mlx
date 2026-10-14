@@ -106,6 +106,26 @@ missing).
   before the new state dir is created. Remove it once the rename is fully
   absorbed.
 
+## Concurrent agents
+
+Several agents may run against this repo at once. Keep them from colliding:
+
+- **One writer per checkout.** Any agent that edits files must run in its own
+  git worktree/branch and commit before it reports back. Never leave two
+  agents' output uncommitted in the same tree.
+- **Single-writer artifacts.** `VERSION`, `package.json`'s version, the version
+  headings in `CHANGELOG.md`, and the README's `(semver, currently X.Y.Z)` line
+  belong to the releaser only. Agents do not touch them.
+- **Changelog fragments.** Rather than editing `CHANGELOG.md`, an agent drops a
+  `changelog.d/<slug>.md` fragment (Keep a Changelog headings). The releaser
+  folds fragments into `CHANGELOG.md` under the new version heading and deletes
+  them.
+- **Disjoint file scopes.** `marv-mlx.zsh` and `lib/marv-mlx-helpers.zsh` are the
+  two big shared files — serialize work that touches them.
+- **Pre-flight.** The tree must be clean before launching a writer
+  (`git status --porcelain` empty). `make doctor` fails on a duplicated
+  `## [Unreleased]` heading — the tell-tale of two writers in one tree.
+
 ## Known pitfalls
 
 - **`extensions/marv-mlx.ts` must stay in sync with `install.sh`.** As of the
