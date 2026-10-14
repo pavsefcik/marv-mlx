@@ -6,6 +6,8 @@ sync across `VERSION`, `package.json`, and the README.
 
 ## [Unreleased]
 
+## [0.136.4] - 2026-10-14
+
 ### Fixed
 - **Every chat turn re-prefilled the whole conversation (~5k tokens, ~30s).**
   mlx-vlm 0.7.4 ships Automatic Prefix Caching (APC) but leaves it off by
