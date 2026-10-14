@@ -206,6 +206,9 @@ Usage:
   marv-mlx download <model>...    download model(s) from the HuggingFace Hub
   marv-mlx curated [--json]       show the full curated model catalog (all tiers)
   marv-mlx info <model> [--json]  show details for a model (size, family, thinking)
+  marv-mlx cache [--json]         show on-disk footprint (APC, logs, hub, tool env)
+  marv-mlx clean --apc|--logs|--venvs|--all [--dry-run] [--force]
+                                  delete regenerable caches (never model weights)
   marv-mlx endpoint [--json]      print the base URL / model of the running server
   marv-mlx version | -v           print the marv-mlx version
   marv-mlx help | -h | --help     show this help
@@ -558,4 +561,255 @@ _marv_mlx_purge_orphan_blobs() {
   if (( removed > 0 )); then
     print -r -- "Freed $removed orphaned shared blob(s): $freed_bytes bytes"
   fi
+}
+
+# ---- on-disk footprint + hygiene (`marv-mlx cache` / `marv-mlx clean`) --------
+#
+# Self-contained on purpose: both verbs run BEFORE marv-mlx.zsh's gum/curl/
+# mlx-vlm tool check (reporting the footprint should work on a half-broken
+# install), so they cannot rely on marv-mlx()'s locals or on functions defined
+# inside its body.
+
+# _marv_mlx_du_bytes <dir> — apparent size in bytes; 0 when the path is absent.
+# NOTE: the local must NOT be named `path` — in zsh `path` is the special array
+# tied to PATH, so `local path=...` silently replaces your command search path.
+_marv_mlx_du_bytes() {
+  local target="$1" kib
+  [[ -e "$target" ]] || { print -r -- 0; return 0 }
+  kib="$(du -sk "$target" 2>/dev/null | awk '{print $1; exit}')"
+  [[ -n "$kib" ]] || kib=0
+  print -r -- $(( kib * 1024 ))
+}
+
+# _marv_mlx_fmt_bytes <bytes> — base-1024 human size with one decimal.
+_marv_mlx_fmt_bytes() {
+  awk -v b="${1:-0}" 'BEGIN {
+    split("B KiB MiB GiB TiB", u, " "); i = 1
+    while (b >= 1024 && i < 5) { b /= 1024; i++ }
+    if (i == 1) printf "%d %s", b, u[i]; else printf "%.1f %s", b, u[i]
+  }'
+}
+
+# _marv_mlx_servers_running — emit "pid<TAB>port" for marv-mlx's server ports.
+# Port-based, not name-based: the server renames itself to the model name via
+# setproctitle (MARV_MLX_PROCTITLE), so `pgrep mlx_vlm.server` misses it.
+_marv_mlx_servers_running() {
+  command -v lsof >/dev/null 2>&1 || return 0
+  # `-Fpcn`: `n` (the internet address) is NOT emitted by default. With only
+  # `pc`, lsof prints p/c/f lines and no `n`, so the awk below silently yields
+  # nothing and the live-server guard never fires. Verified against macOS lsof.
+  lsof -nP -Fpcn -iTCP:11500-11509 -sTCP:LISTEN 2>/dev/null | awk '
+    /^p/ { pid = substr($0, 2) }
+    /^n/ { port = substr($0, 2); sub(/.*:/, "", port); if (pid != "") print pid "\t" port }
+  '
+}
+
+# _marv_mlx_last_cached_tokens <log_dir> — APC reuse of the most recent request
+# in the newest server log, or empty when no server has logged yet. `grep -a`
+# because a log can contain binary blobs, and the digits guard keeps a stray
+# match from corrupting the --json payload.
+_marv_mlx_last_cached_tokens() {
+  local log_dir="$1" n
+  [[ -d "$log_dir" ]] || return 0
+  local -a logs=( "$log_dir"/*.log(Nom) )
+  (( ${#logs[@]} )) || return 0
+  n="$(grep -a -o 'cached_tokens=[0-9]*' "${logs[1]}" 2>/dev/null | tail -n 1 | sed 's/cached_tokens=//')"
+  [[ "$n" == <-> ]] && print -r -- "$n"
+  return 0
+}
+
+# _marv_mlx_cache_report [state_dir] [hub_dir] [tools_dir]
+# TSV, one row per location: <key><TAB><bytes><TAB><path><TAB><removable 0|1>.
+# `removable` marks what `marv-mlx clean` may delete — regenerable caches only.
+# Model weights and chat history are reported but never disposable.
+_marv_mlx_cache_report() {
+  local state_dir="${1:-$HOME/.cache/marv/mlx}"
+  local hub_dir="${2:-$HOME/.cache/huggingface/hub}"
+  local tools_dir="${3:-}"
+  if [[ -z "$tools_dir" ]] && command -v uv >/dev/null 2>&1; then
+    tools_dir="$(uv tool dir 2>/dev/null)"
+  fi
+  [[ -n "$tools_dir" ]] || tools_dir="$HOME/.local/share/uv/tools"
+
+  local -a keys=( apc logs chats venvs hub env )
+  # `apc` follows the effective APC_DISK_PATH (set by _marv_mlx_export_apc_env)
+  # so the report and `clean --apc` agree on the same directory. `venvs` is a
+  # legacy path older builds / manual experiments left under the state dir.
+  local -a paths=(
+    "${APC_DISK_PATH:-$state_dir/apc}" "$state_dir/logs" "$state_dir/chats" "$state_dir/venvs"
+    "$hub_dir" "$tools_dir/mlx-vlm"
+  )
+  local -a removable=( 1 1 0 1 0 0 )
+  local i
+  for (( i = 1; i <= ${#keys[@]}; i++ )); do
+    print -r -- "${keys[$i]}"$'\t'"$(_marv_mlx_du_bytes "${paths[$i]}")"$'\t'"${paths[$i]}"$'\t'"${removable[$i]}"
+  done
+}
+
+# Usage lines for the two hygiene verbs (also printed on --help).
+_marv_mlx_cache_usage() {
+  print -r -- "usage: marv-mlx cache [--json]"
+}
+
+_marv_mlx_clean_usage() {
+  print -r -- "usage: marv-mlx clean [--apc|--logs|--venvs|--all] [--dry-run] [--force]"
+}
+
+# _marv_mlx_cache_cmd <state_dir> <hub_dir> <log_dir> [--json] — `marv-mlx cache`.
+_marv_mlx_cache_cmd() {
+  local state_dir="$1" hub_dir="$2" log_dir="$3"
+  shift 3
+  local json=0 a
+  for a in "$@"; do
+    case "$a" in
+      --json) json=1 ;;
+      --help|-h) _marv_mlx_cache_usage; return 0 ;;
+      *) print -u2 "marv-mlx cache: unknown option '$a'"; _marv_mlx_cache_usage >&2; return 2 ;;
+    esac
+  done
+
+  # Is APC actually on? `MARV_MLX_APC`/`APC_ENABLED` opt-outs win, and the
+  # export helper returns early on opt-out without setting APC_ENABLED — so this
+  # must be computed BEFORE calling it, not read back from it.
+  local enabled=1
+  case "${MARV_MLX_APC:-}" in (0|off|false|no) enabled=0 ;; esac
+  case "${APC_ENABLED:-}" in (0|off|false|no) enabled=0 ;; esac
+  _marv_mlx_export_apc_env "$state_dir"
+
+  # Numeric settings are interpolated into the JSON payload, so coerce a
+  # non-numeric env override back to the default rather than emit invalid JSON.
+  local cap iv ent
+  cap="${APC_DISK_MAX_GB:-5}";          [[ "$cap" == <-> ]] || cap=5
+  iv="${APC_CHECKPOINT_INTERVAL_TOKENS:-512}"; [[ "$iv" == <-> ]] || iv=512
+  ent="${APC_CHECKPOINT_ENTRIES:-2}";    [[ "$ent" == <-> ]] || ent=2
+
+  local -a keys=() sizes=() paths=() rem=()
+  local k b p r
+  while IFS=$'\t' read -r k b p r; do
+    keys+=( "$k" ); sizes+=( "$b" ); paths+=( "$p" ); rem+=( "$r" )
+  done < <(_marv_mlx_cache_report "$state_dir" "$hub_dir")
+  local ct; ct="$(_marv_mlx_last_cached_tokens "$log_dir")"
+
+  if (( json )); then
+    printf '{"state_dir":"%s","apc":{"enabled":%s,"disk_path":"%s","disk_max_gb":%s,"checkpoint_interval_tokens":%s,"checkpoint_entries":%s},"cached_tokens_last":%s,"sizes":{' \
+      "$(_marv_mlx_json_escape "$state_dir")" "$enabled" \
+      "$(_marv_mlx_json_escape "${APC_DISK_PATH:-}")" \
+      "$cap" "$iv" "$ent" \
+      "${ct:-null}"
+    local i first=1
+    for (( i = 1; i <= ${#keys[@]}; i++ )); do
+      (( first )) || print -n ','
+      first=0
+      printf '"%s":%s' "$(_marv_mlx_json_escape "${keys[$i]}")" "${sizes[$i]}"
+    done
+    print '}}'
+    return 0
+  fi
+
+  local i total=0 mark
+  printf 'marv-mlx cache — %s\n\n' "$state_dir"
+  printf '  %-10s %-9s %s\n' "SIZE" "CATEGORY" "PATH"
+  for (( i = 1; i <= ${#keys[@]}; i++ )); do
+    mark=" "
+    (( rem[i] )) && mark="*"
+    printf '  %-10s %s%-8s %s\n' \
+      "$(_marv_mlx_fmt_bytes "${sizes[$i]}")" "$mark" "${keys[$i]}" "${paths[$i]}"
+    (( total += sizes[i] ))
+  done
+  printf '\n  %s total\n\n' "$(_marv_mlx_fmt_bytes "$total")"
+  print "  * = regenerable; remove with 'marv-mlx clean <category>'"
+  print "  APC: enabled=$enabled  cap=${cap}GB  interval=${iv} tokens  entries=${ent}"
+  [[ -n "$ct" ]] && print "  APC last request: cached_tokens=$ct"
+  return 0
+}
+
+# _marv_mlx_clean_cmd <state_dir> <hub_dir> [--apc|--logs|--venvs|--all]
+#                                       [--dry-run] [--force]
+# Deletes regenerable caches only — never the weight hub or chat history, and
+# never anything by default (no args is a usage error, so a stray `clean` cannot
+# destroy state).
+_marv_mlx_clean_cmd() {
+  local state_dir="$1" hub_dir="$2"
+  shift 2
+  local dry=0 force=0 a
+  local -a want=()
+  for a in "$@"; do
+    case "$a" in
+      --dry-run) dry=1 ;;
+      --force|-f) force=1 ;;
+      --apc|--logs|--venvs) want+=( "${a#--}" ) ;;
+      --all) want=( apc logs venvs ) ;;
+      --help|-h) _marv_mlx_clean_usage; return 0 ;;
+      *) print -u2 "marv-mlx clean: unknown option '$a'"; _marv_mlx_clean_usage >&2; return 2 ;;
+    esac
+  done
+  if (( ${#want[@]} == 0 )); then
+    print -u2 "marv-mlx clean: nothing selected — refusing to delete by default."
+    _marv_mlx_clean_usage >&2
+    print -u2 ""
+    print -u2 "See sizes first:  marv-mlx cache"
+    return 2
+  fi
+
+  # Resolve the APC dir the same way `cache` reports it, so the two agree.
+  _marv_mlx_export_apc_env "$state_dir"
+
+  # A live server has the APC checkpoints open; deleting them under it is
+  # undefined, so require an explicit --force.
+  local running; running="$(_marv_mlx_servers_running)"
+  if (( ! dry )) && (( ! force )) && [[ " ${want[*]} " == *" apc "* ]] && [[ -n "$running" ]]; then
+    local rline rp rport
+    rline="${${(f)running}[1]}"
+    rp="${rline%%$'\t'*}"
+    rport="${rline##*$'\t'}"
+    print -u2 "marv-mlx clean: a server is live on :$rport (pid $rp) and may hold APC files."
+    print -u2 "Stop it ('marv-mlx stop') or pass --force."
+    return 1
+  fi
+
+  local -a keys=() sizes=() paths=() rem=()
+  local k b p r
+  while IFS=$'\t' read -r k b p r; do
+    keys+=( "$k" ); sizes+=( "$b" ); paths+=( "$p" ); rem+=( "$r" )
+  done < <(_marv_mlx_cache_report "$state_dir" "$hub_dir")
+
+  local kind target i freed=0 n=0 sz
+  for kind in "${want[@]}"; do
+    target=""
+    for (( i = 1; i <= ${#keys[@]}; i++ )); do
+      if [[ "${keys[$i]}" == "$kind" ]]; then
+        (( rem[i] )) && target="${paths[$i]}"
+        break
+      fi
+    done
+    if [[ -z "$target" ]]; then
+      print -u2 "marv-mlx clean: '$kind' is not a disposable category"
+      return 2
+    fi
+    # Defence in depth: every disposable category lives under the state dir. A
+    # drifted APC_DISK_PATH (or future category) must not turn this into an
+    # arbitrary-path `rm -rf`.
+    if [[ "$target" != "$state_dir"/* ]]; then
+      print -u2 "marv-mlx clean: refusing to delete '$target' — outside the state dir ($state_dir)"
+      return 1
+    fi
+    if [[ ! -e "$target" ]]; then
+      print "marv-mlx: nothing to clean ($kind)"
+      continue
+    fi
+    sz="$(_marv_mlx_du_bytes "$target")"
+    if (( dry )); then
+      print "would remove: $kind — $(_marv_mlx_fmt_bytes "$sz") ($target)"
+      continue
+    fi
+    rm -rf "$target" 2>/dev/null || { print -u2 "marv-mlx clean: could not remove $target"; return 1; }
+    freed=$(( freed + sz )); (( n++ ))
+    print "removed: $kind — $(_marv_mlx_fmt_bytes "$sz")"
+  done
+  if (( dry )); then
+    print "dry run — nothing removed"
+    return 0
+  fi
+  print "marv-mlx: cleaned $n target(s), freed $(_marv_mlx_fmt_bytes "$freed")"
+  return 0
 }

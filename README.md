@@ -81,6 +81,9 @@ marv-mlx list [--json]          # locally installed models
 marv-mlx download <model>...    # download model(s) from the HuggingFace Hub
 marv-mlx curated [--json]       # the full curated catalog, all RAM tiers
 marv-mlx info <model> [--json]  # size, family, thinking spec, path
+marv-mlx cache [--json]         # on-disk footprint (APC, logs, hub, tool env)
+marv-mlx clean --apc|--logs|--venvs|--all [--dry-run] [--force]
+                                # delete regenerable caches (never model weights)
 marv-mlx endpoint [--json]      # base URL / model of the running server
 marv-mlx version                # installed version
 marv-mlx help                   # usage

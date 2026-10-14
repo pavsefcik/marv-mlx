@@ -34,6 +34,23 @@ marv-mlx() {
     return 0
   fi
 
+  # cache/clean are on-disk reporting + hygiene. Like version, they must work on
+  # a half-broken install (no gum/uv/mlx-vlm), and `clean` must not depend on a
+  # tool check — so they are handled here, before it. Both keep the CLI contract:
+  # data on stdout, errors on stderr, exit 0 ok / 1 failure / 2 usage error.
+  if [[ "${1:-}" == (cache|clean) ]]; then
+    _marv_mlx_migrate_legacy_state
+    # Source config.zsh here too (not only on the main path) so the report and
+    # clean see MARV_MLX_APC / APC_* overrides set there. No state dirs are
+    # created: cache only reads and clean removes what already exists.
+    [[ -r "$config_file" ]] && source "$config_file"
+    case "$1" in
+      cache) _marv_mlx_cache_cmd "$state_dir" "$hub_dir" "$log_dir" "${@:2}" ;;
+      clean) _marv_mlx_clean_cmd "$state_dir" "$hub_dir" "${@:2}" ;;
+    esac
+    return $?
+  fi
+
   local cmd missing=()
   for cmd in gum curl uvx mlx_vlm.server; do
     command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")

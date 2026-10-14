@@ -212,4 +212,44 @@ check '' "$(_marv_mlx_parse_catalog "$hub/empty.md")" "catalog: empty file -> no
 # The US delimiter round-trips a field containing spaces and slashes.
 check 6 "$(print -r -- "$row1" | awk -F$'\x1f' '{print NF}')" "catalog: exactly 6 fields"
 
+# --- cache footprint helpers --------------------------------------------------
+check "0 B"     "$(_marv_mlx_fmt_bytes 0)"          "fmt 0"
+check "512 B"   "$(_marv_mlx_fmt_bytes 512)"        "fmt bytes"
+check "1.0 KiB" "$(_marv_mlx_fmt_bytes 1024)"       "fmt KiB"
+check "1.5 GiB" "$(_marv_mlx_fmt_bytes 1610612736)" "fmt GiB"
+
+# Regression guard: _marv_mlx_du_bytes once declared `local path=...`, which
+# rebinds zsh's special path array (backing PATH) and broke command lookup
+# inside it. That surfaces as a 0/short return, asserted below. (A PATH-equality
+# assertion would be vacuous: `local` is restored on return and $( ) runs in a
+# subshell.) Also assert the source doesn't reintroduce the declaration.
+local hub_bytes="$(_marv_mlx_du_bytes "$hub")"
+check 1 "$([[ "$hub_bytes" == <-> && "$hub_bytes" -gt 0 ]] && print 1 || print 0)" \
+  "du_bytes returns a positive byte count"
+local path_decl=0
+grep -qE '^[[:space:]]*local path=' "${0:A:h}/../lib/marv-mlx-helpers.zsh" && path_decl=1
+check 0 "$path_decl" "helpers declare no 'local path=' (PATH-clobber guard)"
+
+# A missing path is a silent zero, not an error.
+check "0" "$(_marv_mlx_du_bytes "$hub/does-not-exist")" "du_bytes missing path -> 0"
+
+# --- APC defaults must agree across the two layers that enable it --------------
+# `_marv_mlx_export_apc_env` (helpers) covers marv-mlx's own launches and the
+# sitecustomize payload covers foreign ones. If a change to one skips the other,
+# foreign servers silently behave differently from marv-mlx's.
+local lib_dir="${0:A:h}/../lib"
+local h_max h_int h_ent s_max s_int s_ent
+h_max=$(sed -n 's/.*APC_DISK_MAX_GB:-\([0-9][0-9]*\)}.*/\1/p' "$lib_dir/marv-mlx-helpers.zsh" | head -n1)
+h_int=$(sed -n 's/.*APC_CHECKPOINT_INTERVAL_TOKENS:-\([0-9][0-9]*\)}.*/\1/p' "$lib_dir/marv-mlx-helpers.zsh" | head -n1)
+h_ent=$(sed -n 's/.*APC_CHECKPOINT_ENTRIES:-\([0-9][0-9]*\)}.*/\1/p' "$lib_dir/marv-mlx-helpers.zsh" | head -n1)
+s_max=$(sed -n 's/.*setdefault("APC_DISK_MAX_GB", "\([0-9][0-9]*\)").*/\1/p' "$lib_dir/marv-mlx-apc-sitecustomize.py" | head -n1)
+s_int=$(sed -n 's/.*setdefault("APC_CHECKPOINT_INTERVAL_TOKENS", "\([0-9][0-9]*\)").*/\1/p' "$lib_dir/marv-mlx-apc-sitecustomize.py" | head -n1)
+s_ent=$(sed -n 's/.*setdefault("APC_CHECKPOINT_ENTRIES", "\([0-9][0-9]*\)").*/\1/p' "$lib_dir/marv-mlx-apc-sitecustomize.py" | head -n1)
+check "$h_max" "$s_max" "APC disk cap agrees across layers"
+check "$h_int" "$s_int" "APC checkpoint interval agrees across layers"
+check "$h_ent" "$s_ent" "APC checkpoint entries agrees across layers"
+[[ -n "$h_max" && -n "$h_int" && -n "$h_ent" ]] \
+  && print "ok: APC defaults are non-empty on both layers" \
+  || { print -u2 "FAIL: APC defaults not found (sed patterns drifted?)"; fail=1; }
+
 exit $fail

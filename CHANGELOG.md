@@ -6,6 +6,41 @@ sync across `VERSION`, `package.json`, and the README.
 
 ## [Unreleased]
 
+### Added
+- **`marv-mlx cache` and `marv-mlx clean`.** `cache [--json]` reports the
+  on-disk footprint (APC checkpoints, logs, chat history, the HF hub, the
+  mlx-vlm tool env) plus the effective APC settings and the newest request's
+  `cached_tokens`. `clean --apc|--logs|--venvs|--all [--dry-run] [--force]`
+  deletes regenerable caches only: never model weights or chat history, never
+  anything with no target flag, and it refuses `--apc` while a server is live
+  (the checkpoints are memory-mapped) unless `--force` is given. Both run before
+  the gum/uv/mlx-vlm tool check, so they still work on a half-broken install —
+  silent accumulation (a multi-GB APC tree, a stale per-model venv) is now
+  visible and reclaimable.
+
+### Fixed
+- **pi `/marv-mlx-setup` now produces the same environment as `install.sh`.**
+  The extension previously ran `uv tool install mlx-vlm --with jinja2` —
+  unpinned, no `--force`, no `setproctitle`, no shim, no dep prune — so a
+  pi-managed install could differ from a script install (and hit uv's link quirk
+  that skips `mlx_vlm.server`). It now resolves uv's dirs with
+  `uv tool dir [--bin]`, installs `mlx-vlm@0.7.4 --with jinja2 --with
+  setproctitle --force` (retried 3x), synthesizes the same `mlx_vlm.server`
+  shim, prunes `datasets/pandas/pyarrow`, and wires uv's actual bin dir into
+  `~/.zshrc` instead of a hardcoded `~/.local/bin`.
+- **`_marv_mlx_du_bytes` clobbered `PATH`.** The helper declared
+  `local path=...`, which in zsh rebinds the special `path` array backing `PATH`,
+  so every command lookup inside it failed (`command not found: awk`). Renamed
+  and regression-tested.
+
+### Changed
+- **`make doctor`** asserts the installer invariants documented in `AGENTS.md`
+  (the `mlx-vlm@0.7.4` pin, `--with setproctitle` and `--force` present and
+  matching between `install.sh` and `extensions/marv-mlx.ts`, no `--bin-dir`,
+  APC sitecustomize marker present). `tests/test_helpers.zsh` additionally fails
+  if the APC defaults drift between `_marv_mlx_export_apc_env` and
+  `lib/marv-mlx-apc-sitecustomize.py`.
+
 ## [0.136.4] - 2026-10-14
 
 ### Fixed

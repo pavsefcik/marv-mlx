@@ -44,7 +44,15 @@ models in-pi and runs a headless `marv-mlx run`.
 
 - Test: `make test` (runs `python3 -m unittest discover -s tests` then
   `zsh tests/test_helpers.zsh`, `zsh tests/test_cli.zsh`, `zsh tests/test_migration.zsh`).
+- Installer invariants: `make doctor` (asserts `install.sh` parses, the
+  `mlx-vlm@0.7.4` pin and `--with setproctitle`/`--force` match between
+  `install.sh` and `extensions/marv-mlx.ts`, no `--bin-dir` is passed, and the
+  APC sitecustomize marker is present). Run it before a release.
 - Validate the installer: `sh -n install.sh`.
+- On-disk hygiene: `marv-mlx cache [--json]` reports the footprint (APC, logs,
+  hub, tool env); `marv-mlx clean --apc|--logs|--venvs|--all [--dry-run] [--force]` deletes
+  regenerable caches only (never model weights or chat history, and never
+  anything without an explicit flag).
 - No lint/build step is enforced for the zsh; be careful with `set -e` /
   `POSIX sh` compatibility in `install.sh` (it runs under `/bin/sh`).
 
@@ -100,14 +108,25 @@ missing).
 
 ## Known pitfalls
 
-- **`extensions/marv-mlx.ts` diverges from `install.sh`.** The pi-managed
-  setup installs `uv tool install mlx-vlm --with jinja2` (unpinned, no
-  `--force`, no shim), appends `$HOME/.local/bin` to `~/.zshrc` directly, and
-  copies only `marv-mlx.zsh` + `lib/marv-mlx-helpers.zsh` + `lib/marv_mlx_repl.py`
-  + `VERSION` to the stable dir — **not** `lib/sitecustomize.py`, so the
-  process-rename feature silently no-ops on a pi copy. It also hardcodes a
-  dev-fallback repo path `~/Dev/projects/marv-mlx`. Keep it in sync with the
-  installer invariants above, or document the divergence.
+- **`extensions/marv-mlx.ts` must stay in sync with `install.sh`.** As of the
+  parity pass it resolves `uv tool dir [--bin]`, installs
+  `mlx-vlm@0.7.4 --with jinja2 --with setproctitle --force` (retried 3×), writes
+  the same `mlx_vlm.server` shim, prunes `datasets/pandas/pyarrow`, installs the
+  APC sitecustomize, and wires uv's actual bin dir into PATH. `make doctor`
+  fails if the pin/`--force`/`setproctitle` drift apart. Two deliberate
+  divergences remain: it does **not** copy `lib/sitecustomize.py` (the
+  process-rename payload), so that feature no-ops on a pi copy, and it hardcodes
+  a dev-fallback repo path `~/Dev/projects/marv-mlx`.
+- **Never name a zsh local `path`.** `path` is the special array tied to `PATH`,
+  so `local path="$1"` silently replaces your command search path for the rest
+  of the function (it surfaced as `command not found: awk` inside
+  `_marv_mlx_du_bytes`). Use `target`/`dir`/`file`. `tests/test_helpers.zsh`
+  guards this for the size helper.
+- **`lsof -F` needs field letters selected explicitly.** `p`/`f` are the only
+  fields `lsof` emits unconditionally; with `-Fpc` you get no `n` line, so
+  `_marv_mlx_servers_running` (the live-server guard for `marv-mlx clean --apc`)
+  silently detected nothing. Use `-Fpcn`. `make doctor` and the real-listener
+  test in `tests/test_cli.zsh` guard this.
 - **`scripts/migrate-shared-blobs.py` is required after enabling
   `HF_HUB_DISABLE_SHARED_BLOBS=1`** (which `marv-mlx.zsh` exports process-wide on
   launch). Run it once to rewrite existing hub blobs.

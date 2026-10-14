@@ -44,6 +44,7 @@ import { execFile } from "node:child_process";
 import { constants as FS_CONST } from "node:fs";
 import {
   access,
+  chmod,
   copyFile,
   mkdir,
   readFile,
@@ -137,6 +138,20 @@ function errMsg(err: unknown): string {
   return e.stderr?.trim() || e.message || String(err);
 }
 
+/**
+ * Resolve a directory from uv (`uv tool dir` / `uv tool dir --bin`).
+ * uv's dirs are configurable (UV_TOOL_BIN_DIR, XDG_BIN_HOME, XDG_DATA_HOME) and
+ * depend on how uv was installed, so we ask uv — only falling back to the
+ * hardcoded default when the query itself fails (matching install.sh step 4).
+ */
+async function uvDir(args: string[], fallback: string): Promise<string> {
+  try {
+    return (await execFileP("uv", args)).stdout.trim() || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 /** First marv-mlx.zsh we can find: explicit env, then known repo locations. */
 async function findMarvMlxZsh(): Promise<string | undefined> {
   const env = process.env.MARV_MLX_ZSH;
@@ -154,14 +169,16 @@ async function findMarvMlxZsh(): Promise<string | undefined> {
   return undefined;
 }
 
-async function ensureLocalBinOnPath(ui: SetupUI): Promise<void> {
-  if (!(await pathOk(join(homedir(), ".local", "bin", "mlx_vlm.server")))) return;
+async function ensureLocalBinOnPath(ui: SetupUI, uvToolBin: string): Promise<void> {
+  if (!(await pathOk(join(uvToolBin, "mlx_vlm.server"), FS_CONST.X_OK))) return;
   const zshrc = join(homedir(), ".zshrc");
   try {
     const cur = await readFile(zshrc, "utf8").catch(() => "");
-    if (!cur.includes("local/bin")) {
-      await writeFile(zshrc, `${cur}\nexport PATH="$HOME/.local/bin:$PATH"\n`);
-      ui.notify("marv-mlx-setup: appended ~/.local/bin to ~/.zshrc", "info");
+    // Mirror install.sh step 5: wire the dir uv actually used, not a hardcoded
+    // ~/.local/bin (uv's bin dir is configurable via UV_TOOL_BIN_DIR / XDG_BIN_HOME).
+    if (!cur.includes(uvToolBin)) {
+      await writeFile(zshrc, `${cur}\nexport PATH="${uvToolBin}:$PATH"\n`);
+      ui.notify(`marv-mlx-setup: appended ${uvToolBin} to ~/.zshrc`, "info");
     }
   } catch {
     // best effort
@@ -226,7 +243,7 @@ async function installApcSitecustomize(ui: SetupUI): Promise<void> {
 
 /**
  * /marv-mlx-setup — idempotent install/repair:
- *   1. Xcode CLT 2. brew 3. uv+gum 4. mlx-vlm+jinja2 (uv tool)
+ *   1. Xcode CLT 2. brew 3. uv+gum 4. mlx-vlm+jinja2+setproctitle (uv tool)
  *   5. PATH fix 6. stable marv-mlx.zsh copy + generated wrapper
  */
 let setupRunning = false;
@@ -273,27 +290,86 @@ async function runSetup(ui: SetupUI): Promise<void> {
       }
     }
 
-    // 4. mlx-vlm as a uv tool. Always re-run so jinja2 is guaranteed (mlx-vlm's
-    //    apply_chat_template needs it for every request and its own requirements
-    //    don't declare it).
+    // 4. mlx-vlm as a uv tool — mirrors install.sh step 4 so pi-managed setups
+    //    get the identical, reproducible env: pinned version, jinja2
+    //    (apply_chat_template needs it for every request and mlx-vlm's own
+    //    requirements don't declare it), setproctitle (server renames itself to
+    //    the model in ps/Activity Monitor), and --force. Resolve uv's tool + bin
+    //    dirs up front (configurable, so don't hardcode them).
     ui.setStatus(key, "⟳ installing mlx-vlm (uv tool)…");
-    try {
-      await execFileP("uv", ["tool", "install", "mlx-vlm", "--with", "jinja2"], {
-        timeout: 15 * 60 * 1000,
-      });
-    } catch (err) {
-      ui.notify(`marv-mlx-setup: mlx-vlm install failed — ${errMsg(err)}`, "error");
-      return;
+    const uvToolBin = await uvDir(["tool", "dir", "--bin"], join(homedir(), ".local", "bin"));
+    const uvToolDir = await uvDir(["tool", "dir"], join(homedir(), ".local", "share", "uv", "tools"));
+    // The tool is large and network-bound; retry the install a couple of times.
+    let installed = false;
+    for (let attempt = 1; attempt <= 3 && !installed; attempt++) {
+      try {
+        await execFileP(
+          "uv",
+          ["tool", "install", "mlx-vlm@0.7.4", "--with", "jinja2", "--with", "setproctitle", "--force"],
+          { timeout: 15 * 60 * 1000 }
+        );
+        installed = true;
+      } catch (err) {
+        if (attempt === 3) {
+          ui.notify(`marv-mlx-setup: mlx-vlm install failed after ${attempt} attempts — ${errMsg(err)}`, "error");
+          return;
+        }
+        ui.setStatus(key, `⟳ mlx-vlm install failed — retrying (attempt ${attempt})…`);
+      }
     }
 
-    // 4b. APC sitecustomize: default mlx-vlm's prefix caching ON inside the
+    // uv occasionally fails to link every console script (seen: it links only
+    // convert+generate and skips mlx_vlm.server). marv-mlx needs
+    // mlx_vlm.server, so synthesize the same fallback shim install.sh writes.
+    if (!(await pathOk(join(uvToolBin, "mlx_vlm.server"), FS_CONST.X_OK)) && !(await onPath("mlx_vlm.server"))) {
+      try {
+        const shim = join(uvToolBin, "mlx_vlm.server");
+        await mkdir(uvToolBin, { recursive: true });
+        await writeFile(
+          shim,
+          `#!/usr/bin/env bash\n` +
+            `# marv-mlx fallback shim — uv didn't link mlx_vlm.server; run the tool env module.\n` +
+            `exec "${uvToolDir}/mlx-vlm/bin/python" -m mlx_vlm.server "$@"\n`
+        );
+        await chmod(shim, 0o755);
+        ui.notify(`marv-mlx-setup: created mlx_vlm.server shim in ${uvToolBin} (uv did not link it)`, "info");
+      } catch (err) {
+        ui.notify(`marv-mlx-setup: could not create mlx_vlm.server shim — ${errMsg(err)}`, "error");
+        return;
+      }
+    }
+
+    // 4b. Prune unused heavy deps (install.sh step 4b): an older mlx-vlm — or a
+    //     stale/extra'd env — can leave `datasets` (-> pandas/pyarrow, ~160MB)
+    //     behind. It is never used at inference/server runtime. opencv/scipy/
+    //     mlx-audio are deliberately kept (VLM/audio models need them).
+    try {
+      await execFileP(
+        "uv",
+        [
+          "pip",
+          "uninstall",
+          "--python",
+          join(uvToolDir, "mlx-vlm", "bin", "python"),
+          "-q",
+          "datasets",
+          "pandas",
+          "pyarrow",
+        ],
+        { timeout: 5 * 60 * 1000 }
+      );
+    } catch {
+      // best effort — pruning is an optimization, not a requirement
+    }
+
+    // 4c. APC sitecustomize: default mlx-vlm's prefix caching ON inside the
     //     tool env, so servers launched by ANY tool (marv's embedded launch
     //     included — it spawns mlx_vlm.server directly, bypassing marv-mlx)
     //     reuse the conversation KV instead of re-prefilling every turn.
     await installApcSitecustomize(ui);
 
-    // 5. ~/.local/bin on PATH for future shells.
-    await ensureLocalBinOnPath(ui);
+    // 5. uv's tool bin dir on PATH for future shells.
+    await ensureLocalBinOnPath(ui, uvToolBin);
 
     // 6. Wire the wrapper (stable copy if we can find a marv-mlx.zsh source).
     const wired = await wireMarvMlx(ui);
@@ -303,7 +379,7 @@ async function runSetup(ui: SetupUI): Promise<void> {
     ui.notify(
       depsOk
         ? "marv-mlx-setup: deps + wrapper ready — pick a local model via /model"
-        : "marv-mlx-setup: deps installed — open a new terminal so ~/.local/bin is on PATH, then /model",
+        : `marv-mlx-setup: deps installed — open a new terminal so ${uvToolBin} is on PATH, then /model`,
       "info"
     );
   } finally {

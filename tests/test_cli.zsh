@@ -31,7 +31,7 @@ print -r -- '{"model_type": "gemma4_unified"}' > "$hub/models--acme--gemma-4-12B
 # --- Stub tools on PATH so the pre-dispatch tool check passes ------------------
 bin="$tmp/bin"
 mkdir -p "$bin"
-for t in gum uvx mlx_vlm.server; do printf '#!/bin/sh\nexit 0\n' > "$bin/$t"; chmod +x "$bin/$t"; done
+for t in gum uvx mlx_vlm.server lsof; do printf '#!/bin/sh\nexit 0\n' > "$bin/$t"; chmod +x "$bin/$t"; done
 # curl always fails fast: the network-using verbs are skipped by design in CLI
 # mode, and the self-update check should not be hit.
 printf '#!/bin/sh\nexit 1\n' > "$bin/curl"; chmod +x "$bin/curl"
@@ -131,5 +131,90 @@ marv-mlx bogus >/dev/null 2>&1; check 2 "$?" "unknown command -> 2"
 
 # --- stop --all is a no-op (and silent) when nothing runs ----------------------
 marv-mlx stop --all >/dev/null 2>&1; check 0 "$?" "stop --all exit=0 when idle"
+
+# --- cache / clean (on-disk footprint + hygiene) ------------------------------
+# The lsof stub above keeps these hermetic: no listener -> idle, as in a fresh
+# shell. Regenerable caches are the only things `clean` may touch.
+mkdir -p "$HOME/.cache/marv/mlx/apc" "$HOME/.cache/marv/mlx/venvs"
+head -c 65536 /dev/zero > "$HOME/.cache/marv/mlx/apc/checkpoint.safetensors"
+venvs_sentinel="$HOME/.cache/marv/mlx/venvs/keep"
+head -c 16 /dev/zero > "$venvs_sentinel"
+
+check 0 "$(marv-mlx cache >/dev/null 2>&1; echo $?)" "cache exit=0"
+out=$(marv-mlx cache 2>/dev/null)
+[[ "$out" == *"apc"* && "$out" == *"hub"* ]] && print "ok: cache lists categories" \
+  || { print -u2 "FAIL: cache categories missing"; print -u2 "$out"; fail=1; }
+out=$(marv-mlx cache --json 2>/dev/null)
+check ok "$(print -r -- "$out" | python3 -c 'import json,sys
+d=json.load(sys.stdin)
+print("ok" if d["sizes"]["apc"] >= 65536 and d["apc"]["enabled"] in (0, 1) and "disk_max_gb" in d["apc"] else "bad")' 2>/dev/null)" \
+  "cache --json sizes + apc block"
+
+# Nothing is deletable by default; unknown flags are usage errors.
+marv-mlx clean >/dev/null 2>&1; check 2 "$?" "clean (no target) -> 2"
+marv-mlx clean --nope >/dev/null 2>&1; check 2 "$?" "clean unknown flag -> 2"
+
+# --dry-run reports without deleting.
+out=$(marv-mlx clean --dry-run --all 2>/dev/null); rc=$?
+check 0 "$rc" "clean --dry-run exit=0"
+[[ "$out" == *"would remove: apc"* ]] && print "ok: clean --dry-run names apc" \
+  || { print -u2 "FAIL: clean --dry-run output: $out"; fail=1; }
+[[ -f "$HOME/.cache/marv/mlx/apc/checkpoint.safetensors" ]] \
+  && print "ok: clean --dry-run deleted nothing" \
+  || { print -u2 "FAIL: clean --dry-run deleted files"; fail=1; }
+
+# A real clean removes the selected category only.
+marv-mlx clean --apc >/dev/null 2>&1; check 0 "$?" "clean --apc exit=0"
+[[ -e "$HOME/.cache/marv/mlx/apc/checkpoint.safetensors" ]] \
+  && { print -u2 "FAIL: clean --apc left APC files"; fail=1; } \
+  || print "ok: clean --apc removed APC files"
+[[ -f "$venvs_sentinel" ]] && print "ok: clean --apc left other categories" \
+  || { print -u2 "FAIL: clean --apc removed venvs"; fail=1; }
+
+# Live-server guard: a listener on marv-mlx's port range makes `clean --apc`
+# refuse unless --force (deleting memory-mapped checkpoints is unsafe).
+bin_live="$tmp/bin_live"; mkdir -p "$bin_live"
+printf '#!/bin/sh\nprintf "p123\\ncpython3.13\\nn*:11500\\n"\n' > "$bin_live/lsof"
+chmod +x "$bin_live/lsof"
+saved_path="$PATH"
+export PATH="$bin_live:$PATH"
+mkdir -p "$HOME/.cache/marv/mlx/apc"
+head -c 65536 /dev/zero > "$HOME/.cache/marv/mlx/apc/checkpoint.safetensors"
+err=$(marv-mlx clean --apc 2>&1 >/dev/null); rc=$?
+check 1 "$rc" "clean --apc refuses while a server is live"
+[[ "$err" == *"--force"* ]] && print "ok: live-server guard suggests --force" \
+  || { print -u2 "FAIL: guard message: $err"; fail=1; }
+[[ -f "$HOME/.cache/marv/mlx/apc/checkpoint.safetensors" ]] \
+  && print "ok: refused clean deleted nothing" \
+  || { print -u2 "FAIL: refused clean deleted files"; fail=1; }
+export PATH="$saved_path"
+
+# A real `clean --all` removes every disposable category and preserves chats.
+mkdir -p "$HOME/.cache/marv/mlx/apc" "$HOME/.cache/marv/mlx/venvs" "$HOME/.cache/marv/mlx/chats"
+head -c 4096 /dev/zero > "$HOME/.cache/marv/mlx/apc/x.safetensors"
+head -c 4096 /dev/zero > "$HOME/.cache/marv/mlx/venvs/x"
+chat_sentinel="$HOME/.cache/marv/mlx/chats/keep.json"
+head -c 128 /dev/zero > "$chat_sentinel"
+marv-mlx clean --all >/dev/null 2>&1; check 0 "$?" "clean --all exit=0"
+[[ -f "$chat_sentinel" ]] && print "ok: clean --all preserved chat history" \
+  || { print -u2 "FAIL: clean --all deleted chats"; fail=1; }
+[[ -e "$HOME/.cache/marv/mlx/venvs/x" ]] \
+  && { print -u2 "FAIL: clean --all left venvs"; fail=1; } \
+  || print "ok: clean --all removed venvs"
+
+# Real-lsof integration. The stub above hard-codes the exact `-F` output shape a
+# buggy flag set would omit, so it cannot catch a wrong lsof field list. Verify
+# _marv_mlx_servers_running against an actual listener with the real lsof (clean
+# PATH so the stub is bypassed).
+if command -v python3 >/dev/null 2>&1; then
+  python3 -m http.server 11507 >/dev/null 2>&1 &
+  srv_pid=$!
+  sleep 1.2
+  got="$(env PATH="/usr/bin:/bin:/usr/sbin:/sbin" zsh -c \
+    "source '$repo/lib/marv-mlx-helpers.zsh'; _marv_mlx_servers_running")"
+  kill "$srv_pid" 2>/dev/null
+  [[ "$got" == *"11507"* ]] && print "ok: servers_running detects a real listener" \
+    || { print -u2 "FAIL: servers_running missed a real listener (got '$got')"; fail=1; }
+fi
 
 exit $fail
