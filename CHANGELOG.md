@@ -6,6 +6,8 @@ sync across `VERSION`, `package.json`, and the README.
 
 ## [Unreleased]
 
+## [0.137.0] - 2026-10-14
+
 ### Added
 - **`marv-mlx cache` and `marv-mlx clean`.** `cache [--json]` reports the
   on-disk footprint (APC checkpoints, logs, chat history, the HF hub, the
