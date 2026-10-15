@@ -31,20 +31,7 @@ print -r -- '{"model_type": "gemma4_unified"}' > "$hub/models--acme--gemma-4-12B
 # --- Stub tools on PATH so the pre-dispatch tool check passes ------------------
 bin="$tmp/bin"
 mkdir -p "$bin"
-for t in gum uvx mlx_vlm.server; do printf '#!/bin/sh\nexit 0\n' > "$bin/$t"; chmod +x "$bin/$t"; done
-# lsof is stubbed to report "no listeners" by default, but delegates to the real
-# binary when MARV_TEST_REAL_LSOF is set. The real-lsof integration test below
-# needs that (a hand-picked PATH turned out to be runner-fragile), and an
-# absolute path avoids the stub resolving to itself.
-cat > "$bin/lsof" <<'LSOF'
-#!/bin/sh
-[ -n "$MARV_TEST_REAL_LSOF" ] || exit 0
-for p in /usr/sbin/lsof /usr/bin/lsof /sbin/lsof; do
-  [ -x "$p" ] && exec "$p" "$@"
-done
-exit 1
-LSOF
-chmod +x "$bin/lsof"
+for t in gum uvx mlx_vlm.server lsof; do printf '#!/bin/sh\nexit 0\n' > "$bin/$t"; chmod +x "$bin/$t"; done
 # curl always fails fast: the network-using verbs are skipped by design in CLI
 # mode, and the self-update check should not be hit.
 printf '#!/bin/sh\nexit 1\n' > "$bin/curl"; chmod +x "$bin/curl"
@@ -215,63 +202,11 @@ marv-mlx clean --all >/dev/null 2>&1; check 0 "$?" "clean --all exit=0"
   && { print -u2 "FAIL: clean --all left venvs"; fail=1; } \
   || print "ok: clean --all removed venvs"
 
-# Real-lsof integration. The stub above hard-codes the exact `-F` output shape a
-# buggy flag set would omit, so it cannot catch a wrong lsof field list. Verify
-# _marv_mlx_servers_running against an actual listener, with the stub delegating
-# to the real lsof (MARV_TEST_REAL_LSOF). Polls for the bind rather than a fixed
-# sleep, and prints the raw lsof output on failure so a runner difference is
-# diagnosable instead of a bare 'got nothing'.
-if command -v python3 >/dev/null 2>&1; then
-  real_lsof=""
-  for p in /usr/sbin/lsof /usr/bin/lsof /sbin/lsof; do
-    [ -x "$p" ] && { real_lsof="$p"; break; }
-  done
-  if [ -z "$real_lsof" ]; then
-    print "note: real-lsof listener check skipped (no lsof on this host)"
-  else
-    source "$repo/lib/marv-mlx-helpers.zsh"
-    # Independent of lsof: is anything actually accepting on this port?
-    port_probe() {
-      python3 - "$1" <<'PY'
-import socket, sys
-s = socket.socket(); s.settimeout(0.5)
-try:
-    s.connect(("127.0.0.1", int(sys.argv[1]))); print("up")
-except OSError:
-    print("down")
-PY
-    }
-    python3 -m http.server 11507 >/dev/null 2>&1 &
-    srv_pid=$!
-    up=0
-    for _ in {1..20}; do
-      [ "$(port_probe 11507)" = "up" ] && { up=1; break; }
-      sleep 0.5
-    done
-    if (( ! up )); then
-      kill "$srv_pid" 2>/dev/null
-      print "note: real-lsof listener check skipped (listener never bound on this host)"
-    else
-      got=""
-      for _ in {1..10}; do
-        got="$(MARV_TEST_REAL_LSOF=1 _marv_mlx_servers_running)"
-        [[ "$got" == *"11507"* ]] && break
-        sleep 0.5
-      done
-      if [[ "$got" == *"11507"* ]]; then
-        print "ok: servers_running detects a real listener"
-      else
-        print -u2 "FAIL: servers_running missed a live listener on :11507 (got '$got')"
-        print -u2 "  lsof binary: $real_lsof  (PATH lsof: $(command -v lsof))"
-        print -u2 "  raw lsof -Fpcn, listener still up:"
-        MARV_TEST_REAL_LSOF=1 lsof -nP -Fpcn -iTCP:11507 -sTCP:LISTEN 2>&1 | sed 's/^/    /' >&2
-        print -u2 "  raw lsof -t, listener still up:"
-        MARV_TEST_REAL_LSOF=1 lsof -iTCP:11507 -sTCP:LISTEN -t 2>&1 | sed 's/^/    /' >&2
-        fail=1
-      fi
-      kill "$srv_pid" 2>/dev/null
-    fi
-  fi
-fi
+# The lsof listener parsing is covered hermetically in
+# tests/test_helpers.zsh (real `lsof -Fpcn` output shapes, including the
+# missing-`n` regression), and `make doctor` asserts the helper passes
+# `-Fpcn`. A live-listener check lived here, but GitHub's macOS runners did
+# not reliably bind localhost, so it skipped instead of verifying -- a test
+# that cannot fail is worse than no test.
 
 exit $fail

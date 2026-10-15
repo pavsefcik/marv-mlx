@@ -233,6 +233,23 @@ check 0 "$path_decl" "helpers declare no 'local path=' (PATH-clobber guard)"
 # A missing path is a silent zero, not an error.
 check "0" "$(_marv_mlx_du_bytes "$hub/does-not-exist")" "du_bytes missing path -> 0"
 
+# --- lsof listener parsing (the live-server guard's core) ----------------------
+# `make doctor` asserts the helper passes `-Fpcn`; these pin the parser against
+# real output shapes, including the missing-`n` shape that `-Fpc` produces. That
+# regression is what made `clean --apc`'s live-server guard silently inert.
+check $'123\t11507' \
+  "$(printf 'p123\ncPython\nf4\nn*:11507\n' | _marv_mlx_parse_lsof_listeners)" \
+  "lsof parse: pid + wildcard port"
+check $'1\t11500\n2\t11509' \
+  "$(printf 'p1\ncA\nn*:11500\np2\ncB\nn127.0.0.1:11509\n' | _marv_mlx_parse_lsof_listeners)" \
+  "lsof parse: multiple listeners, wildcard + ipv4"
+check '' \
+  "$(printf 'p123\ncPython\nf4\n' | _marv_mlx_parse_lsof_listeners)" \
+  "lsof parse: no 'n' line -> nothing (the -Fpc regression)"
+check '' \
+  "$(printf '' | _marv_mlx_parse_lsof_listeners)" \
+  "lsof parse: empty input -> nothing"
+
 # --- APC defaults must agree across the two layers that enable it --------------
 # `_marv_mlx_export_apc_env` (helpers) covers marv-mlx's own launches and the
 # sitecustomize payload covers foreign ones. If a change to one skips the other,

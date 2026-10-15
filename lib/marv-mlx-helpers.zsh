@@ -590,18 +590,26 @@ _marv_mlx_fmt_bytes() {
   }'
 }
 
-# _marv_mlx_servers_running — emit "pid<TAB>port" for marv-mlx's server ports.
-# Port-based, not name-based: the server renames itself to the model name via
-# setproctitle (MARV_MLX_PROCTITLE), so `pgrep mlx_vlm.server` misses it.
-_marv_mlx_servers_running() {
-  command -v lsof >/dev/null 2>&1 || return 0
-  # `-Fpcn`: `n` (the internet address) is NOT emitted by default. With only
-  # `pc`, lsof prints p/c/f lines and no `n`, so the awk below silently yields
-  # nothing and the live-server guard never fires. Verified against macOS lsof.
-  lsof -nP -Fpcn -iTCP:11500-11509 -sTCP:LISTEN 2>/dev/null | awk '
+# _marv_mlx_parse_lsof_listeners — turn `lsof -Fpcn` output into "pid<TAB>port".
+# Split out from _marv_mlx_servers_running so it can be tested hermetically: the
+# port lives on the `n` (internet address) line, which lsof emits only when `n`
+# is in the -F field list.
+_marv_mlx_parse_lsof_listeners() {
+  awk '
     /^p/ { pid = substr($0, 2) }
     /^n/ { port = substr($0, 2); sub(/.*:/, "", port); if (pid != "") print pid "\t" port }
   '
+}
+
+# _marv_mlx_servers_running — emit "pid<TAB>port" for marv-mlx's server ports.
+# Port-based, not name-based: the server renames itself to the model name via
+# setproctitle (MARV_MLX_PROCTITLE), so `pgrep mlx_vlm.server` misses it.
+# `-Fpcn` is load-bearing: `p`/`f` are the only fields lsof emits unconditionally,
+# so `-Fpc` produces no `n` line and this silently returns nothing (the
+# live-server guard in `clean --apc` would go blind). See AGENTS.md.
+_marv_mlx_servers_running() {
+  command -v lsof >/dev/null 2>&1 || return 0
+  lsof -nP -Fpcn -iTCP:11500-11509 -sTCP:LISTEN 2>/dev/null | _marv_mlx_parse_lsof_listeners
 }
 
 # _marv_mlx_last_cached_tokens <log_dir> — APC reuse of the most recent request

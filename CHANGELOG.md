@@ -9,14 +9,15 @@ sync across `VERSION`, `package.json`, and the README.
 ## [0.137.2] - 2026-10-15
 
 ### Fixed
-- **CI: the real-lsof listener check failed on the runner.**
-  `tests/test_cli.zsh` verified `_marv_mlx_servers_running` against a live
-  `python3 -m http.server` using a hand-picked `PATH`, which did not yield a
-  working `lsof` on `macos-latest` (and used a fixed 1.2 s sleep for the bind).
-  The stub `lsof` now delegates to the real binary via an absolute path when
-  `MARV_TEST_REAL_LSOF` is set, the helper is called in-process, and the test
-  polls for the listener and prints the raw lsof output on failure. It skips
-  (with a note, not a pass) only if the host has no real `lsof`.
+- **CI: the listener check could not run on the runner.** `tests/test_cli.zsh`
+  verified `_marv_mlx_servers_running` against a live `python3 -m http.server`.
+  GitHub's `macos-latest` runners did not reliably bind localhost, so the test
+  skipped (and, before that, failed on a hand-picked `PATH`). A test that cannot
+  fail is worse than no test, so the live check was replaced with deterministic
+  coverage: the `lsof -Fpcn` parsing is split into `_marv_mlx_parse_lsof_listeners`
+  and pinned in `tests/test_helpers.zsh` against real output shapes — including
+  the missing-`n` shape that `-Fpc` produces, which had made the live-server
+  guard silent. `make doctor` independently asserts the helper passes `-Fpcn`.
 
 ## [0.137.1] - 2026-10-14
 
