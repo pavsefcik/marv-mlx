@@ -230,23 +230,46 @@ if command -v python3 >/dev/null 2>&1; then
     print "note: real-lsof listener check skipped (no lsof on this host)"
   else
     source "$repo/lib/marv-mlx-helpers.zsh"
+    # Independent of lsof: is anything actually accepting on this port?
+    port_probe() {
+      python3 - "$1" <<'PY'
+import socket, sys
+s = socket.socket(); s.settimeout(0.5)
+try:
+    s.connect(("127.0.0.1", int(sys.argv[1]))); print("up")
+except OSError:
+    print("down")
+PY
+    }
     python3 -m http.server 11507 >/dev/null 2>&1 &
     srv_pid=$!
-    got=""
+    up=0
     for _ in {1..20}; do
-      got="$(MARV_TEST_REAL_LSOF=1 _marv_mlx_servers_running)"
-      [[ "$got" == *"11507"* ]] && break
+      [ "$(port_probe 11507)" = "up" ] && { up=1; break; }
       sleep 0.5
     done
-    kill "$srv_pid" 2>/dev/null
-    if [[ "$got" == *"11507"* ]]; then
-      print "ok: servers_running detects a real listener"
+    if (( ! up )); then
+      kill "$srv_pid" 2>/dev/null
+      print "note: real-lsof listener check skipped (listener never bound on this host)"
     else
-      print -u2 "FAIL: servers_running missed a real listener (got '$got')"
-      print -u2 "  lsof: $real_lsof ; lsof on PATH resolves to: $(command -v lsof)"
-      print -u2 "  raw real-lsof output for :11507:"
-      MARV_TEST_REAL_LSOF=1 lsof -nP -Fpcn -iTCP:11507 -sTCP:LISTEN 2>&1 | sed 's/^/    /' >&2
-      fail=1
+      got=""
+      for _ in {1..10}; do
+        got="$(MARV_TEST_REAL_LSOF=1 _marv_mlx_servers_running)"
+        [[ "$got" == *"11507"* ]] && break
+        sleep 0.5
+      done
+      if [[ "$got" == *"11507"* ]]; then
+        print "ok: servers_running detects a real listener"
+      else
+        print -u2 "FAIL: servers_running missed a live listener on :11507 (got '$got')"
+        print -u2 "  lsof binary: $real_lsof  (PATH lsof: $(command -v lsof))"
+        print -u2 "  raw lsof -Fpcn, listener still up:"
+        MARV_TEST_REAL_LSOF=1 lsof -nP -Fpcn -iTCP:11507 -sTCP:LISTEN 2>&1 | sed 's/^/    /' >&2
+        print -u2 "  raw lsof -t, listener still up:"
+        MARV_TEST_REAL_LSOF=1 lsof -iTCP:11507 -sTCP:LISTEN -t 2>&1 | sed 's/^/    /' >&2
+        fail=1
+      fi
+      kill "$srv_pid" 2>/dev/null
     fi
   fi
 fi
