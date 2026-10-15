@@ -172,4 +172,4 @@ when one exists a
 **Update to latest version** entry that pulls and reinstalls in place (a
 pi-managed install instead guides you to `pi update`; a curl/managed copy is
 refreshed from GitHub automatically). Installed version lives
-in the repo-root `VERSION` file (semver, currently 0.137.1).
+in the repo-root `VERSION` file (semver, currently 0.137.2).

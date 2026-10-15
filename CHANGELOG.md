@@ -6,6 +6,18 @@ sync across `VERSION`, `package.json`, and the README.
 
 ## [Unreleased]
 
+## [0.137.2] - 2026-10-15
+
+### Fixed
+- **CI: the real-lsof listener check failed on the runner.**
+  `tests/test_cli.zsh` verified `_marv_mlx_servers_running` against a live
+  `python3 -m http.server` using a hand-picked `PATH`, which did not yield a
+  working `lsof` on `macos-latest` (and used a fixed 1.2 s sleep for the bind).
+  The stub `lsof` now delegates to the real binary via an absolute path when
+  `MARV_TEST_REAL_LSOF` is set, the helper is called in-process, and the test
+  polls for the listener and prints the raw lsof output on failure. It skips
+  (with a note, not a pass) only if the host has no real `lsof`.
+
 ## [0.137.1] - 2026-10-14
 
 ### Added
