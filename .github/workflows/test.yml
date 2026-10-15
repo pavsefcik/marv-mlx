@@ -1,0 +1,26 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    # macOS, not ubuntu: the suite exercises BSD/macOS-only tools
+    # (`lsof -Fpcn`, `stat -f%z`, `head -c`). The project targets Apple
+    # Silicon, so the runner should match.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Installer and changelog invariants
+        run: make doctor
+
+      - name: Tests (python + zsh)
+        run: make test

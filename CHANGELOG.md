@@ -6,6 +6,21 @@ sync across `VERSION`, `package.json`, and the README.
 
 ## [Unreleased]
 
+## [0.137.1] - 2026-10-14
+
+### Added
+- **CI (`.github/workflows/`).** `Test` runs `make doctor` + `make test` on
+  every push to `main` and every pull request. `Release` runs on a published
+  release and verifies that `VERSION`, the `vX.Y.Z` tag, the `CHANGELOG.md`
+  section, `package.json` and the README semver line all agree, then re-runs the
+  same checks. Both use `macos-latest` because the suite exercises BSD/macOS-only
+  tools (`lsof -Fpcn`, `stat -f%z`, `head -c`), and the project targets Apple
+  Silicon. This closes a real gap: the installer resolves its download ref from
+  `releases/latest` and the in-app update check reads the same endpoint, so a
+  tag with no release — or a release whose files disagree on the version —
+  silently ships the wrong thing (v0.137.0 was tagged before its release
+  existed, and `releases/latest` still pointed at v0.136.3).
+
 ## [0.137.0] - 2026-10-14
 
 ### Added

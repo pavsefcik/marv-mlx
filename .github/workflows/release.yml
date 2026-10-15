@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Verify VERSION matches the release tag
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          if [ "v${version}" != "${TAG}" ]; then
+            echo "VERSION (${version}) does not match release tag (${TAG})" >&2
+            exit 1
+          fi
+
+      # The installer resolves its download ref from `releases/latest`, and the
+      # in-app update check reads the same endpoint -- so a tag without a
+      # release, or a release whose artifacts disagree on the version, ships the
+      # wrong thing. Fail loudly instead.
+      - name: Verify the changelog, package.json and README agree on the version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version="${TAG#v}"
+          grep -q "^## \[${version}\]" CHANGELOG.md \
+            || { echo "CHANGELOG.md has no '## [${version}]' section" >&2; exit 1; }
+          grep -q "\"version\": \"${version}\"" package.json \
+            || { echo "package.json is not at ${version}" >&2; exit 1; }
+          grep -q "semver, currently ${version}" README.md \
+            || { echo "README.md does not name ${version}" >&2; exit 1; }
+
+      - name: Installer and changelog invariants
+        run: make doctor
+
+      - name: Tests (python + zsh)
+        run: make test
