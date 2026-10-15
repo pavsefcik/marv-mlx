@@ -31,7 +31,20 @@ print -r -- '{"model_type": "gemma4_unified"}' > "$hub/models--acme--gemma-4-12B
 # --- Stub tools on PATH so the pre-dispatch tool check passes ------------------
 bin="$tmp/bin"
 mkdir -p "$bin"
-for t in gum uvx mlx_vlm.server lsof; do printf '#!/bin/sh\nexit 0\n' > "$bin/$t"; chmod +x "$bin/$t"; done
+for t in gum uvx mlx_vlm.server; do printf '#!/bin/sh\nexit 0\n' > "$bin/$t"; chmod +x "$bin/$t"; done
+# lsof is stubbed to report "no listeners" by default, but delegates to the real
+# binary when MARV_TEST_REAL_LSOF is set. The real-lsof integration test below
+# needs that (a hand-picked PATH turned out to be runner-fragile), and an
+# absolute path avoids the stub resolving to itself.
+cat > "$bin/lsof" <<'LSOF'
+#!/bin/sh
+[ -n "$MARV_TEST_REAL_LSOF" ] || exit 0
+for p in /usr/sbin/lsof /usr/bin/lsof /sbin/lsof; do
+  [ -x "$p" ] && exec "$p" "$@"
+done
+exit 1
+LSOF
+chmod +x "$bin/lsof"
 # curl always fails fast: the network-using verbs are skipped by design in CLI
 # mode, and the self-update check should not be hit.
 printf '#!/bin/sh\nexit 1\n' > "$bin/curl"; chmod +x "$bin/curl"
@@ -204,17 +217,38 @@ marv-mlx clean --all >/dev/null 2>&1; check 0 "$?" "clean --all exit=0"
 
 # Real-lsof integration. The stub above hard-codes the exact `-F` output shape a
 # buggy flag set would omit, so it cannot catch a wrong lsof field list. Verify
-# _marv_mlx_servers_running against an actual listener with the real lsof (clean
-# PATH so the stub is bypassed).
+# _marv_mlx_servers_running against an actual listener, with the stub delegating
+# to the real lsof (MARV_TEST_REAL_LSOF). Polls for the bind rather than a fixed
+# sleep, and prints the raw lsof output on failure so a runner difference is
+# diagnosable instead of a bare 'got nothing'.
 if command -v python3 >/dev/null 2>&1; then
-  python3 -m http.server 11507 >/dev/null 2>&1 &
-  srv_pid=$!
-  sleep 1.2
-  got="$(env PATH="/usr/bin:/bin:/usr/sbin:/sbin" zsh -c \
-    "source '$repo/lib/marv-mlx-helpers.zsh'; _marv_mlx_servers_running")"
-  kill "$srv_pid" 2>/dev/null
-  [[ "$got" == *"11507"* ]] && print "ok: servers_running detects a real listener" \
-    || { print -u2 "FAIL: servers_running missed a real listener (got '$got')"; fail=1; }
+  real_lsof=""
+  for p in /usr/sbin/lsof /usr/bin/lsof /sbin/lsof; do
+    [ -x "$p" ] && { real_lsof="$p"; break; }
+  done
+  if [ -z "$real_lsof" ]; then
+    print "note: real-lsof listener check skipped (no lsof on this host)"
+  else
+    source "$repo/lib/marv-mlx-helpers.zsh"
+    python3 -m http.server 11507 >/dev/null 2>&1 &
+    srv_pid=$!
+    got=""
+    for _ in {1..20}; do
+      got="$(MARV_TEST_REAL_LSOF=1 _marv_mlx_servers_running)"
+      [[ "$got" == *"11507"* ]] && break
+      sleep 0.5
+    done
+    kill "$srv_pid" 2>/dev/null
+    if [[ "$got" == *"11507"* ]]; then
+      print "ok: servers_running detects a real listener"
+    else
+      print -u2 "FAIL: servers_running missed a real listener (got '$got')"
+      print -u2 "  lsof: $real_lsof ; lsof on PATH resolves to: $(command -v lsof)"
+      print -u2 "  raw real-lsof output for :11507:"
+      MARV_TEST_REAL_LSOF=1 lsof -nP -Fpcn -iTCP:11507 -sTCP:LISTEN 2>&1 | sed 's/^/    /' >&2
+      fail=1
+    fi
+  fi
 fi
 
 exit $fail
