@@ -269,4 +269,37 @@ check "$h_ent" "$s_ent" "APC checkpoint entries agrees across layers"
   && print "ok: APC defaults are non-empty on both layers" \
   || { print -u2 "FAIL: APC defaults not found (sed patterns drifted?)"; fail=1; }
 
+# --- _marv_mlx_last_cached_tokens: newest log across dirs ---------------------
+local ct_a="$hub/ct-a" ct_b="$hub/ct-b"
+mkdir -p "$ct_a" "$ct_b"
+print -r -- 'Prefill completed: prompt_tokens=10 cached_tokens=3' > "$ct_a/own.log"
+sleep 1
+print -r -- 'Prefill completed: prompt_tokens=20 cached_tokens=17' > "$ct_b/harness.log"
+check 17 "$(_marv_mlx_last_cached_tokens "$ct_a" "$ct_b")" \
+  "cached_tokens: newest log across dirs wins"
+check 3 "$(_marv_mlx_last_cached_tokens "$ct_a" "$ct_a/nonexistent")" \
+  "cached_tokens: missing dir ignored"
+check '' "$(_marv_mlx_last_cached_tokens "$ct_a/nonexistent")" \
+  "cached_tokens: no logs -> empty"
+print -r -- 'noise cached_tokens=notanumber' > "$ct_b/harness.log"
+check '' "$(_marv_mlx_last_cached_tokens "$ct_b")" \
+  "cached_tokens: non-numeric match ignored"
+
+# --- sitecustomize chains the next one on sys.path ----------------------------
+# The process-rename hook shadows any sitecustomize later on sys.path (Python
+# imports only the first); it must chain into the marv-mlx APC payload so a
+# marv-mlx launch keeps prefix caching on. Simulate: PYTHONPATH=<hook dir>:<apc
+# dir>, a plain python3 with setproctitle unavailable in a foreign venv would
+# skip the rename but still run the chained APC defaults.
+local chain_lib="${0:A:h}/../lib"
+local chain_apc="$hub/chain-apc"
+mkdir -p "$chain_apc"
+cp "$lib_dir/marv-mlx-apc-sitecustomize.py" "$chain_apc/sitecustomize.py"
+chain_out="$(MARV_MLX_PROCTITLE=chain-test PYTHONPATH="$chain_lib:$chain_apc" python3 -c \
+  'import os; print(os.environ.get("APC_ENABLED", "unset"))' 2>/dev/null)"
+check 1 "$chain_out" "sitecustomize: proctitle hook chains into the APC payload"
+chain_out="$(MARV_MLX_PROCTITLE=chain-test MARV_MLX_APC=0 PYTHONPATH="$chain_lib:$chain_apc" python3 -c \
+  'import os; print(os.environ.get("APC_ENABLED", "unset"))' 2>/dev/null)"
+check unset "$chain_out" "sitecustomize: chained APC opt-out respected (no default set)"
+
 exit $fail

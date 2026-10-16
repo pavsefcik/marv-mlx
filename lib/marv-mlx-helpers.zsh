@@ -612,16 +612,27 @@ _marv_mlx_servers_running() {
   lsof -nP -Fpcn -iTCP:11500-11509 -sTCP:LISTEN 2>/dev/null | _marv_mlx_parse_lsof_listeners
 }
 
-# _marv_mlx_last_cached_tokens <log_dir> — APC reuse of the most recent request
-# in the newest server log, or empty when no server has logged yet. `grep -a`
-# because a log can contain binary blobs, and the digits guard keeps a stray
-# match from corrupting the --json payload.
+# _marv_mlx_last_cached_tokens <log_dir> [<log_dir>...] — APC reuse of the
+# most recent request in the newest server log across the given dirs, or empty
+# when no server has logged yet. Extra dirs matter because the marv harness's
+# embedded launches write to ~/.cache/marv/logs, not to marv-mlx's own log dir.
+# `grep -a` because a log can contain binary blobs, and the digits guard keeps
+# a stray match from corrupting the --json payload.
 _marv_mlx_last_cached_tokens() {
-  local log_dir="$1" n
-  [[ -d "$log_dir" ]] || return 0
-  local -a logs=( "$log_dir"/*.log(Nom) )
+  local dir log n m best="" best_m=-1
+  local -a logs=()
+  for dir in "$@"; do
+    [[ -d "$dir" ]] || continue
+    logs+=( "$dir"/*.log(N) )
+  done
   (( ${#logs[@]} )) || return 0
-  n="$(grep -a -o 'cached_tokens=[0-9]*' "${logs[1]}" 2>/dev/null | tail -n 1 | sed 's/cached_tokens=//')"
+  for log in "${logs[@]}"; do
+    m="$(/usr/bin/stat -f %m "$log" 2>/dev/null)" || continue
+    [[ "$m" == <-> ]] || continue
+    if (( m > best_m )); then best_m=$m; best="$log"; fi
+  done
+  [[ -n "$best" ]] || return 0
+  n="$(grep -a -o 'cached_tokens=[0-9]*' "$best" 2>/dev/null | tail -n 1 | sed 's/cached_tokens=//')"
   [[ "$n" == <-> ]] && print -r -- "$n"
   return 0
 }
@@ -696,7 +707,10 @@ _marv_mlx_cache_cmd() {
   while IFS=$'\t' read -r k b p r; do
     keys+=( "$k" ); sizes+=( "$b" ); paths+=( "$p" ); rem+=( "$r" )
   done < <(_marv_mlx_cache_report "$state_dir" "$hub_dir")
-  local ct; ct="$(_marv_mlx_last_cached_tokens "$log_dir")"
+  # The harness's embedded server logs under ~/.cache/marv/logs, not the
+  # marv-mlx state dir — scan both so `cached_tokens_last` reflects whichever
+  # server actually served most recently.
+  local ct; ct="$(_marv_mlx_last_cached_tokens "$log_dir" "$HOME/.cache/marv/logs")"
 
   if (( json )); then
     printf '{"state_dir":"%s","apc":{"enabled":%s,"disk_path":"%s","disk_max_gb":%s,"checkpoint_interval_tokens":%s,"checkpoint_entries":%s},"cached_tokens_last":%s,"sizes":{' \
