@@ -13,7 +13,8 @@
  *
  * Commands:
  *   /marv-mlx-sync   re-scan the HF hub cache and re-register the "local" provider
- *   /marv-mlx-setup  install/repair marv-mlx + deps (uv, gum, mlx-vlm via brew) and wire
+ *   /marv-mlx-setup  install/repair marv-mlx + deps (uv, gum, mlx-vlm — no brew,
+ *                no Xcode CLT needed) and wire
  *                pi → marv-mlx: copy marv-mlx.zsh (+ lib, curated-llms.md) to
  *                ~/.local/share/marv-mlx (a stable dir, because pi resets
  *                git-package checkouts on update) and write the
@@ -56,7 +57,39 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-const execFileP = promisify(execFile);
+const execFileRaw = promisify(execFile);
+
+// uv and gum both install into the user's own bin dir (no Homebrew), which pi's
+// inherited PATH may not know about yet when setup runs in-process.
+const LOCAL_BIN = process.env.XDG_BIN_HOME ?? join(homedir(), ".local", "bin");
+function pathEnv(): NodeJS.ProcessEnv {
+  return { ...process.env, PATH: `${LOCAL_BIN}:${process.env.PATH ?? ""}` };
+}
+
+/** execFile with LOCAL_BIN prepended to PATH (uv/gum live there). */
+async function execFileP(
+  file: string,
+  args: readonly string[],
+  opts: Record<string, unknown> = {}
+): Promise<{ stdout: string; stderr: string }> {
+  return (
+    execFileRaw as unknown as (
+      f: string,
+      a: readonly string[],
+      o: Record<string, unknown>
+    ) => Promise<{ stdout: string; stderr: string }>
+  )(file, args, { ...opts, env: pathEnv() });
+}
+
+// gum release used by install.sh and /marv-mlx-setup alike (keep in sync —
+// `make doctor` guards these).
+const GUM_VERSION = "2.0.2";
+const GUM_SHA256 = "4777a69b1170b8db23c95d5889fb32186cfda1a3ac950d339aa17e3513633890";
+// Astral's standalone uv installer: a prebuilt binary, so no compiler, no
+// Xcode CLT and no Homebrew on the happy path. UV_NO_MODIFY_PATH keeps PATH
+// wiring in our hands (one line per bin dir in ~/.zshrc).
+const UV_INSTALL_CMD =
+  "curl -LsSf https://astral.sh/uv/install.sh | UV_NO_MODIFY_PATH=1 sh";
 
 // Provider name for marv-mlx in pi's model catalog (defaults to "local", matching models.json).
 const MARV_MLX_PROVIDER = process.env.MARV_MLX_PI_PROVIDER ?? "local";
@@ -174,15 +207,96 @@ async function ensureLocalBinOnPath(ui: SetupUI, uvToolBin: string): Promise<voi
   const zshrc = join(homedir(), ".zshrc");
   try {
     const cur = await readFile(zshrc, "utf8").catch(() => "");
-    // Mirror install.sh step 5: wire the dir uv actually used, not a hardcoded
+    // Mirror install.sh step 5: wire the dirs uv actually used, not a hardcoded
     // ~/.local/bin (uv's bin dir is configurable via UV_TOOL_BIN_DIR / XDG_BIN_HOME).
-    if (!cur.includes(uvToolBin)) {
-      await writeFile(zshrc, `${cur}\nexport PATH="${uvToolBin}:$PATH"\n`);
-      ui.notify(`marv-mlx-setup: appended ${uvToolBin} to ~/.zshrc`, "info");
+    // LOCAL_BIN is where uv and gum themselves live.
+    let next = cur;
+    for (const dir of [LOCAL_BIN, uvToolBin]) {
+      if (next.includes(dir)) continue;
+      next = `${next}\nexport PATH="${dir}:$PATH"\n`;
+      ui.notify(`marv-mlx-setup: appended ${dir} to ~/.zshrc`, "info");
     }
+    if (next !== cur) await writeFile(zshrc, next);
   } catch {
     // best effort
   }
+}
+
+/**
+ * Install uv from Astral's standalone installer (matches install.sh step 2).
+ * Homebrew is only a fallback for hosts where the download fails.
+ */
+async function ensureUv(ui: SetupUI, key: string): Promise<boolean> {
+  if (await onPath("uv")) return true;
+  ui.setStatus(key, "⟳ installing uv…");
+  try {
+    await execFileP("sh", ["-c", UV_INSTALL_CMD], { timeout: 15 * 60 * 1000 });
+  } catch (err) {
+    if (await onPath("brew")) {
+      try {
+        await execFileP("brew", ["install", "uv"], { timeout: 15 * 60 * 1000 });
+      } catch (err2) {
+        ui.notify(`marv-mlx-setup: uv install failed — ${errMsg(err2)}`, "error");
+        return false;
+      }
+    } else {
+      ui.notify(
+        `marv-mlx-setup: uv install failed — ${errMsg(err)}\nInstall it from https://docs.astral.sh/uv/ and re-run.`,
+        "error"
+      );
+      return false;
+    }
+  }
+  if (!(await onPath("uv"))) {
+    ui.notify(
+      `marv-mlx-setup: uv installed to ${LOCAL_BIN} but isn't on PATH yet — open a new terminal, then re-run /marv-mlx-setup`,
+      "error"
+    );
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Install gum from its GitHub release binary (matches install.sh step 3): a
+ * standalone Go binary, so no Homebrew and no Xcode CLT. sha256-checked against
+ * the digest pinned above; brew is only a fallback when the download fails.
+ */
+async function ensureGum(ui: SetupUI, key: string): Promise<boolean> {
+  if (await onPath("gum")) return true;
+  ui.setStatus(key, `⟳ installing gum ${GUM_VERSION}…`);
+  const script = [
+    "set -e",
+    'tmp="$(mktemp -d "${TMPDIR:-/tmp}/marv-mlx-gum.XXXXXX")"',
+    'trap \'rm -rf "$tmp"\' EXIT',
+    `url="https://github.com/charmbracelet/gum/releases/download/v${GUM_VERSION}/gum_${GUM_VERSION}_Darwin_arm64.tar.gz"`,
+    'curl -fsSL "$url" -o "$tmp/gum.tar.gz"',
+    'got="$(shasum -a 256 "$tmp/gum.tar.gz" | cut -d" " -f1)"',
+    `[ "$got" = "${GUM_SHA256}" ] || { echo "checksum mismatch: $got" >&2; exit 1; }`,
+    'tar -xzf "$tmp/gum.tar.gz" -C "$tmp"',
+    'bin="$(find "$tmp" -type f -name gum | head -n1)"',
+    `mkdir -p "${LOCAL_BIN}"`,
+    `install -m 755 "$bin" "${LOCAL_BIN}/gum"`,
+  ].join("\n");
+  try {
+    await execFileP("sh", ["-c", script], { timeout: 10 * 60 * 1000 });
+  } catch (err) {
+    if (await onPath("brew")) {
+      try {
+        await execFileP("brew", ["install", "gum"], { timeout: 15 * 60 * 1000 });
+      } catch (err2) {
+        ui.notify(`marv-mlx-setup: gum install failed — ${errMsg(err2)}`, "error");
+        return false;
+      }
+    } else {
+      ui.notify(
+        `marv-mlx-setup: gum download failed — ${errMsg(err)}\nCheck your network and re-run /marv-mlx-setup.`,
+        "error"
+      );
+      return false;
+    }
+  }
+  return onPath("gum");
 }
 
 /**
@@ -243,8 +357,10 @@ async function installApcSitecustomize(ui: SetupUI): Promise<void> {
 
 /**
  * /marv-mlx-setup — idempotent install/repair:
- *   1. Xcode CLT 2. brew 3. uv+gum 4. mlx-vlm+jinja2+setproctitle (uv tool)
- *   5. PATH fix 6. stable marv-mlx.zsh copy + generated wrapper
+ *   1. uv (Astral standalone installer; brew only as a fallback)
+ *   2. gum (sha256-checked release binary; brew only as a fallback)
+ *   3. mlx-vlm+jinja2+setproctitle (uv tool)
+ *   4. PATH fix 5. stable marv-mlx.zsh copy + generated wrapper
  */
 let setupRunning = false;
 
@@ -258,39 +374,11 @@ async function runSetup(ui: SetupUI): Promise<void> {
   try {
     ui.setStatus(key, "⟳ marv-mlx setup…");
 
-    // 1. Xcode CLT — cannot be automated (GUI prompt); fail fast with instructions.
-    try {
-      await execFileP("xcode-select", ["-p"]);
-    } catch {
-      ui.notify(
-        "marv-mlx-setup: install Xcode Command Line Tools first — run 'xcode-select --install'",
-        "error"
-      );
-      return;
-    }
+    // 1-2. uv + gum — brew-free and CLT-free, exactly like install.sh.
+    if (!(await ensureUv(ui, key))) return;
+    if (!(await ensureGum(ui, key))) return;
 
-    // 2. Homebrew (also needs manual install the first time).
-    if (!(await onPath("brew"))) {
-      ui.notify(
-        "marv-mlx-setup: Homebrew missing — install it first:\n  /bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"\nthen re-run /marv-mlx-setup",
-        "error"
-      );
-      return;
-    }
-
-    // 3. uv + gum via brew (skipped when already present).
-    for (const tool of ["uv", "gum"]) {
-      if (await onPath(tool)) continue;
-      ui.setStatus(key, `⟳ installing ${tool} (brew)…`);
-      try {
-        await execFileP("brew", ["install", tool], { timeout: 15 * 60 * 1000 });
-      } catch (err) {
-        ui.notify(`marv-mlx-setup: brew install ${tool} failed — ${errMsg(err)}`, "error");
-        return;
-      }
-    }
-
-    // 4. mlx-vlm as a uv tool — mirrors install.sh step 4 so pi-managed setups
+    // 3. mlx-vlm as a uv tool — mirrors install.sh step 4 so pi-managed setups
     //    get the identical, reproducible env: pinned version, jinja2
     //    (apply_chat_template needs it for every request and mlx-vlm's own
     //    requirements don't declare it), setproctitle (server renames itself to
@@ -569,7 +657,8 @@ export default async function (pi: ExtensionAPI) {
 
   // One-shot install/repair of marv-mlx + deps and the pi→marv-mlx wiring.
   pi.registerCommand("marv-mlx-setup", {
-    description: "Install/repair marv-mlx + deps (uv, gum, mlx-vlm via brew) and wire pi → marv-mlx",
+    description:
+      "Install/repair marv-mlx + deps (uv, gum, mlx-vlm — no brew or CLT needed) and wire pi → marv-mlx",
     handler: async (_args, ctx) => {
       await runSetup(ctx.ui);
     },
@@ -583,7 +672,7 @@ export default async function (pi: ExtensionAPI) {
     if ((await pathOk(WRAPPER)) || (await onPath("marv-mlx"))) return;
     const yes = await ctx.ui.confirm(
       "marv-mlx",
-      "marv-mlx isn't wired into pi yet. Run setup now (brew: uv, gum; uv tool: mlx-vlm; writes ~/.pi/agent/bin/marv-mlx wrapper)?"
+      "marv-mlx isn't wired into pi yet. Run setup now (uv + gum + mlx-vlm, no brew needed; writes ~/.pi/agent/bin/marv-mlx wrapper)?"
     );
     if (yes) await runSetup(ctx.ui);
   });

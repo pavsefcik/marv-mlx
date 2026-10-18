@@ -25,17 +25,31 @@ layers read the same Hugging Face hub.
 
 ## Install
 
-One line — installs `uv`, `gum` and `mlx-vlm` (Xcode CLT and Homebrew are the
-only manual steps), installs to `~/.marv-mlx` (`MARV_MLX_DIR` to override) and
-wires the launcher into `~/.zshrc`:
+One line. No Xcode Command Line Tools, no Homebrew, no compiler — it installs
+`uv` (Astral's standalone installer), `gum` (sha256-checked release binary) and
+`mlx-vlm` (uv tool), into `~/.marv-mlx` (`MARV_MLX_DIR` to override), and wires
+the launcher into `~/.zshrc`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/pavsefcik/marv-mlx/main/install.sh | sh
 ```
 
-Requires network for the first install (brew/`uv`), then runs offline once
-models are cached. Homebrew is not supported (the tap is archived) — use the
-curl one-liner above. Open a new terminal afterwards, then run `marv-mlx`.
+To install **and** fetch a model in the same command, pass `--model` (the `-s --`
+is needed because a piped `sh` would otherwise parse the flag itself):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/pavsefcik/marv-mlx/main/install.sh \
+  | sh -s -- --model mlx-community/Qwen3.5-4B-MLX-4bit
+```
+
+`--model` is repeatable. It is **not** the default: without it nothing is
+downloaded and you pick a model in the TUI (`marv-mlx download <id>` works
+afterwards too). Existing `uv`/`gum` installs are reused, never replaced;
+Homebrew is only touched as a fallback when a download fails.
+
+Requires an Apple Silicon Mac on macOS 14+ (the installer preflights both) and
+network for the first install; models run offline once cached. Open a new
+terminal afterwards, then run `marv-mlx`.
 
 ### With pi
 
@@ -46,8 +60,8 @@ pi install git:github.com/pavsefcik/marv-mlx
 ```
 
 Inside pi, run **`/marv-mlx-setup`** (auto-offered on first launch): it installs
-`uv`, `gum` and `mlx-vlm` (Xcode CLT and Homebrew are the only manual steps),
-copies `marv-mlx.zsh` to a stable directory, and wires a headless wrapper. Then
+`uv`, `gum` and `mlx-vlm` the same brew-free way, copies `marv-mlx.zsh` to a
+stable directory, and wires a headless wrapper. Then
 **`/marv-mlx-sync`** and pick a model via `/model` — it starts and switches marv-mlx to
 the selected model automatically.
 
@@ -174,4 +188,4 @@ when one exists a
 **Update to latest version** entry that pulls and reinstalls in place (a
 pi-managed install instead guides you to `pi update`; a curl/managed copy is
 refreshed from GitHub automatically). Installed version lives
-in the repo-root `VERSION` file (semver, currently 0.137.3).
+in the repo-root `VERSION` file (semver, currently 0.138.0).

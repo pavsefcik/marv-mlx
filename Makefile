@@ -58,10 +58,17 @@ doctor:
 	@grep -q -- '--force' install.sh || { echo "doctor: install.sh lost --force"; exit 1; }
 	@grep -q -- '-ge 3' install.sh || { echo "doctor: install.sh lost the 3-attempt retry"; exit 1; }
 	@if grep -q -- '--bin-dir' install.sh; then echo "doctor: install.sh passes --bin-dir (invalid flag)"; exit 1; fi
+	@grep -q 'astral.sh/uv/install.sh' install.sh || { echo "doctor: install.sh lost the brew-free uv installer"; exit 1; }
+	@grep -q 'charmbracelet/gum/releases' install.sh || { echo "doctor: install.sh lost the gum release binary"; exit 1; }
+	@grep -q 'GUM_SHA256="4777a69b' install.sh || { echo "doctor: install.sh lost the pinned gum sha256"; exit 1; }
+	@if grep -q 'Xcode CLT not installed' install.sh; then echo "doctor: install.sh gates on Xcode CLT again"; exit 1; fi
 	@grep -q 'mlx-vlm@0.7.4' extensions/marv-mlx.ts || { echo "doctor: pi extension pin drifted from install.sh"; exit 1; }
 	@grep -q 'setproctitle' extensions/marv-mlx.ts || { echo "doctor: pi extension lost setproctitle"; exit 1; }
 	@grep -q -- '--force' extensions/marv-mlx.ts || { echo "doctor: pi extension lost --force"; exit 1; }
 	@grep -q 'attempt <= 3' extensions/marv-mlx.ts || { echo "doctor: pi extension retry count drifted from install.sh"; exit 1; }
+	@grep -q 'astral.sh/uv/install.sh' extensions/marv-mlx.ts || { echo "doctor: pi extension lost the brew-free uv installer"; exit 1; }
+	@grep -q 'charmbracelet/gum/releases' extensions/marv-mlx.ts || { echo "doctor: pi extension lost the gum release binary"; exit 1; }
+	@grep -q 'GUM_SHA256 = "4777a69b' extensions/marv-mlx.ts || { echo "doctor: pi extension gum sha drifted from install.sh"; exit 1; }
 	@grep -q 'marv-mlx APC sitecustomize' lib/marv-mlx-apc-sitecustomize.py || { echo "doctor: APC sitecustomize marker missing"; exit 1; }
 	@grep -q -- '-Fpcn' lib/marv-mlx-helpers.zsh || { echo "doctor: lsof field list lost 'n' (live-server guard goes inert)"; exit 1; }
 	@n=$$(grep -c '^## \[Unreleased\]' CHANGELOG.md); \

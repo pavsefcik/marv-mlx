@@ -28,8 +28,11 @@ models in-pi and runs a headless `marv-mlx run`.
   blank-line-separated 2-line id/tagline blocks). Edit this to change the
   Download menu / `marv-mlx curated`. `MARV_MLX_CATALOG` overrides the path.
 - `marv-mlx-launcher.zsh` — sourced from `~/.zshrc`; provides the `marv-mlx` shell entry.
-- `install.sh` — standalone installer (brew `uv`/`gum`, `mlx-vlm` as a uv tool,
-  pi extension + wrapper, wires `~/.zshrc`).
+- `install.sh` — standalone installer (uv via Astral's installer, `gum` via its
+  sha256-checked release binary, `mlx-vlm` as a uv tool — no Xcode CLT, no
+  Homebrew; brew is only a fallback and an existing uv/gum is reused),
+  pi extension + wrapper, wires `~/.zshrc`. Accepts `--model <id>` to also
+  download weights.
 - `lib/` — `marv_mlx_repl.py` (chat REPL), `marv-mlx-helpers.zsh`, `sitecustomize.py`
   (setproctitle for process renaming).
 - `extensions/marv-mlx.ts` — pi extension (symlinked/copied into
@@ -46,8 +49,10 @@ models in-pi and runs a headless `marv-mlx run`.
   `zsh tests/test_helpers.zsh`, `zsh tests/test_cli.zsh`, `zsh tests/test_migration.zsh`).
 - Installer invariants: `make doctor` (asserts `install.sh` parses, the
   `mlx-vlm@0.7.4` pin and `--with setproctitle`/`--force` match between
-  `install.sh` and `extensions/marv-mlx.ts`, no `--bin-dir` is passed, and the
-  APC sitecustomize marker is present). Run it before a release.
+  `install.sh` and `extensions/marv-mlx.ts`, no `--bin-dir` is passed, the
+  brew-free uv URL + pinned gum sha256 are present in both, no Xcode-CLT gate has
+  crept back in, and the APC sitecustomize marker is present). Run it before a
+  release.
 - Validate the installer: `sh -n install.sh`.
 - On-disk hygiene: `marv-mlx cache [--json]` reports the footprint (APC, logs,
   hub, tool env); `marv-mlx clean --apc|--logs|--venvs|--all [--dry-run] [--force]` deletes
@@ -91,9 +96,25 @@ Step 4 (`install.sh`) is the fragile part. It must:
   `_marv_mlx_install_apc_sitecustomize`. A `sitecustomize.py` without the
   `marv-mlx APC sitecustomize` marker is foreign and must be left untouched.
 
-Step 5 wires `$UV_TOOL_BIN` into `~/.zshrc` PATH; step 8 sources
-`marv-mlx-launcher.zsh` from `~/.zshrc`. Both write with `>>` (creates `.zshrc` if
-missing).
+Step 5 wires `$UV_TOOL_BIN` (and `$LOCAL_BIN`, where uv itself and gum live) into
+`~/.zshrc` PATH; step 8 sources `marv-mlx-launcher.zsh` from `~/.zshrc`. All
+writes are grep-guarded and use `>>` (creates `.zshrc` if missing).
+
+Steps 1-3 must stay brew-free and CLT-free:
+
+- Step 1 is the hardware preflight (Darwin, arm64, macOS 14+) — the gum release
+  below is Darwin/arm64, and MLX needs Apple Silicon anyway.
+- Step 2 installs uv with `curl -LsSf https://astral.sh/uv/install.sh |
+  UV_NO_MODIFY_PATH=1 sh` — a prebuilt binary, no compiler. `UV_NO_MODIFY_PATH`
+  keeps PATH wiring in this script (otherwise uv writes its own rc line).
+  Reuse any `uv` already on PATH; fall back to `brew install uv` only if the
+  download fails.
+- Step 3 installs `gum` from
+  `gum_${GUM_VERSION}_Darwin_arm64.tar.gz` and **must** verify `GUM_SHA256`
+  before copying the binary to `$LOCAL_BIN/gum`. Never accept an unverified
+  download; fall back to brew only on network failure. `make doctor` fails if
+  the pin, the sha, or the brew-freedom drift apart (in `install.sh` *or* the pi
+  extension).
 
 ## Migration
 
@@ -132,8 +153,10 @@ Several agents may run against this repo at once. Keep them from colliding:
   parity pass it resolves `uv tool dir [--bin]`, installs
   `mlx-vlm@0.7.4 --with jinja2 --with setproctitle --force` (retried 3×), writes
   the same `mlx_vlm.server` shim, prunes `datasets/pandas/pyarrow`, installs the
-  APC sitecustomize, and wires uv's actual bin dir into PATH. `make doctor`
-  fails if the pin/`--force`/`setproctitle` drift apart. Two deliberate
+  APC sitecustomize, wires uv's actual bin dir into PATH, and installs uv/gum the
+  same brew-free way (Astral installer + sha256-checked gum release). `make
+  doctor` fails if the pin/`--force`/`setproctitle`/uv-URL/gum-pin drift apart.
+  Two deliberate
   divergences remain: it does **not** copy `lib/sitecustomize.py` (the
   process-rename payload), so that feature no-ops on a pi copy, and it hardcodes
   a dev-fallback repo path `~/Dev/projects/marv-mlx`.

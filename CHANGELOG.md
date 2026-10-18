@@ -6,6 +6,27 @@ sync across `VERSION`, `package.json`, and the README.
 
 ## [Unreleased]
 
+## [0.138.0] - 2026-10-18
+
+### Changed
+
+- **The installer no longer needs Xcode Command Line Tools or Homebrew.**
+  `install.sh` (and `/marv-mlx-setup`) now installs `uv` from Astral's standalone
+  installer (`UV_NO_MODIFY_PATH=1`, so PATH wiring stays in the script) and `gum`
+  from its GitHub release tarball, verified against a pinned sha256, into
+  `~/.local/bin`. No compiler, no GUI `xcode-select --install` prompt, and an
+  already-installed `uv`/`gum`/Homebrew is detected and reused — Homebrew is only
+  a fallback when a download fails. A hardware preflight (Darwin, arm64,
+  macOS 14+) now runs first and fails with instructions instead of dying halfway
+  through a tool install.
+
+### Added
+
+- **`install.sh --model <id>`** (repeatable; `MARV_MLX_MODEL` env equivalent)
+  downloads models as part of the install, so one command can set up the runtime
+  and its weights. Without it nothing is downloaded — that remains the default.
+- **`--dry-run`, `--no-zsh`, `--help`** flags, plus `MARV_SKIP_HARDWARE_CHECK=1`.
+
 ## [0.137.3] - 2026-10-16
 
 ### Fixed
