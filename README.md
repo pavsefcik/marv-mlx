@@ -25,7 +25,21 @@ layers read the same Hugging Face hub.
 
 ## Install
 
-The repo ships as a [pi package](https://pi.dev/packages) — install [pi](https://pi.dev) once, then everything else comes from in-pi commands:
+One line — installs `uv`, `gum` and `mlx-vlm` (Xcode CLT and Homebrew are the
+only manual steps), installs to `~/.marv-mlx` (`MARV_MLX_DIR` to override) and
+wires the launcher into `~/.zshrc`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/pavsefcik/marv-mlx/main/install.sh | sh
+```
+
+Requires network for the first install (brew/`uv`), then runs offline once
+models are cached. Homebrew is not supported (the tap is archived) — use the
+curl one-liner above. Open a new terminal afterwards, then run `marv-mlx`.
+
+### With pi
+
+The repo also ships as a [pi package](https://pi.dev/packages) — install [pi](https://pi.dev) once, then everything else comes from in-pi commands:
 
 ```sh
 pi install git:github.com/pavsefcik/marv-mlx
@@ -35,24 +49,12 @@ Inside pi, run **`/marv-mlx-setup`** (auto-offered on first launch): it installs
 `uv`, `gum` and `mlx-vlm` (Xcode CLT and Homebrew are the only manual steps),
 copies `marv-mlx.zsh` to a stable directory, and wires a headless wrapper. Then
 **`/marv-mlx-sync`** and pick a model via `/model` — it starts and switches marv-mlx to
-the selected model automatically. Requires network for the first install (brew/
-`uv`), then runs offline once models are cached.
+the selected model automatically.
 
-Prefer `marv-mlx` standalone (no pi)? `git clone` the repo and run
-`sh install.sh` — same deps, plus the pi extension and wrapper. It adds the
+Prefer a repo checkout? `git clone` the repo and run `sh install.sh` — same
+deps, plus the pi extension and wrapper. It adds the
 `marv-mlx-launcher.zsh` source line to `~/.zshrc`, so `marv-mlx` is available in
 any new shell.
-
-### Standalone — one line (curl)
-
-Installs to `~/.marv-mlx` (`MARV_MLX_DIR` to override) and wires the launcher into `~/.zshrc`:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/pavsefcik/marv-mlx/main/install.sh | sh
-```
-
-Homebrew is not supported (the tap is archived) — use the curl one-liner above
-or the repo checkout.
 
 ## Run
 
