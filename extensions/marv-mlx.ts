@@ -547,11 +547,31 @@ async function wireMarvMlx(ui: SetupUI): Promise<boolean> {
 /* Model discovery + provider registration                            */
 /* ------------------------------------------------------------------ */
 
+/** File names under `dir`, recursing a couple of levels (GGUF quant subdirs). */
+async function listWeightFiles(dir: string, depth = 0): Promise<string[]> {
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const names: string[] = [];
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      if (depth < 2) names.push(...(await listWeightFiles(join(dir, entry.name), depth + 1)));
+    } else {
+      names.push(entry.name);
+    }
+  }
+  return names;
+}
+
 /**
- * Whether mlx-vlm can serve this model at all. GGUF repos cannot (neither
- * mlx-vlm nor mlx-lm ships a GGUF loader), so they must not be registered as
- * pi models — mirrored from `_marv_mlx_model_supported` in marv-mlx's zsh
- * helpers. Detected by id or by a .gguf file inside a cached snapshot.
+ * Whether mlx-vlm can serve this model at all — mirrored from
+ * `_marv_mlx_model_unsupported_reason` in marv-mlx's zsh helpers. mlx-vlm loads
+ * `*.safetensors` (MLX-quantized or plain bf16/fp16 HF), so these cannot be
+ * served: GGUF, weightless/PyTorch-.bin/ONNX/CoreML repos, and weights packed
+ * for another runtime (bitsandbytes/gptq/awq/compressed-tensors). fp8 is fine.
  */
 async function isServableModel(id: string, dir: string): Promise<boolean> {
   if (/gguf/i.test(id)) return false;
@@ -562,17 +582,28 @@ async function isServableModel(id: string, dir: string): Promise<boolean> {
   } catch {
     return true; // no snapshot yet: nothing contradicts it being MLX
   }
+  let sawSnapshot = false;
   for (const rev of revs) {
     if (!rev.isDirectory()) continue;
-    let files;
+    sawSnapshot = true;
+    const snap = join(snapshots, rev.name);
+    const names = await listWeightFiles(snap);
+    if (names.some((n) => /\.gguf$/i.test(n))) continue;
+    const hasSafetensors = names.some(
+      (n) => /\.safetensors$/i.test(n) && !/consolidated\.safetensors$/i.test(n),
+    );
+    if (!hasSafetensors) continue;
+    let quantMethod = "";
     try {
-      files = await readdir(join(snapshots, rev.name), { withFileTypes: true });
+      const cfg = JSON.parse(await readFile(join(snap, "config.json"), "utf8"));
+      quantMethod = String(cfg?.quantization_config?.quant_method ?? "").toLowerCase();
     } catch {
-      continue;
+      // No/invalid config.json: leave the verdict to the server.
     }
-    if (files.some((f) => /\.[Gg][Gg][Uu][Ff]$/.test(f.name))) return false;
+    if (quantMethod && quantMethod !== "fp8") continue;
+    return true;
   }
-  return true;
+  return !sawSnapshot;
 }
 
 /**

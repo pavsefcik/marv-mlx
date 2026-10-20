@@ -386,36 +386,80 @@ _marv_mlx_ministral_base() {
   print -r -- "$(print -r -- "${1##*/}" | sed -E 's/-([Ii]nstruct|[Rr]easoning)-[^-]+-/-/')"
 }
 
-# Whether mlx-vlm can actually serve this model. GGUF repos are not: neither
-# mlx-vlm nor mlx-lm has a GGUF loader, so such a repo would only fail at
-# launch. Detect it by id (`…-GGUF`, `Quants/Q4_K_M.gguf`, …) or by a .gguf
-# file in the cached snapshot (covers oddly named repos).
+# Why mlx-vlm cannot serve this model, or nothing when it can.
+#
+# mlx-vlm's loader (`mlx_vlm.utils.load_model`) reads `*.safetensors` with MLX
+# (dtype reinterpreting for fp8) after sanitizing the key names — MLX-quantized
+# repos and plain bf16/fp16 HF repos both load. What cannot load:
+#   - GGUF (llama.cpp): neither mlx-vlm nor mlx-lm has a GGUF loader.
+#   - anything without safetensors: PyTorch `pytorch_model.bin`, ONNX, CoreML,
+#     npz-only archives — mlx-vlm aborts with "No safetensors found".
+#   - PyTorch-only packing (bitsandbytes/gptq/awq/compressed-tensors/…): the
+#     weights are packed for another runtime and need `mlx_vlm.convert` first.
+#     fp8 IS supported (mlx-vlm reads `quantization_config.quant_method: fp8`),
+#     and MLX's own key is `quantization`, not `quantization_config`.
 #   $1 = model id (e.g. mlx-community/Qwen3-4B-4bit)
-#   $2 = HF hub dir (optional; id-only check when empty)
-# Returns 0 when servable, 1 otherwise.
-_marv_mlx_model_supported() {
-  local model="$1" hub_dir="$2" snap
-  [[ -z "$model" ]] && return 0
-  [[ "${model:l}" == *gguf* ]] && return 1
-  if [[ -n "$hub_dir" ]]; then
-    snap=$(ls -d "$hub_dir/models--${model//\//--}"/snapshots/*(N/) 2>/dev/null | head -n1)
-    if [[ -n "$snap" ]]; then
-      local -a ggufs=( "$snap"/**/*.gguf(N) )
-      (( ${#ggufs[@]} )) && return 1
-    fi
+#   $2 = HF hub dir (optional; id-only check when empty — no snapshot to inspect)
+# Prints the reason and returns 0 when unsupported; prints nothing and returns 1
+# when the model is servable.
+_marv_mlx_model_unsupported_reason() {
+  local model="$1" hub_dir="$2" snap st f qm
+  [[ -z "$model" ]] && return 1
+  [[ "${model:l}" == *gguf* ]] && {
+    print -r -- "GGUF (llama.cpp) — mlx-vlm has no GGUF loader"
+    return 0
+  }
+  [[ -n "$hub_dir" ]] || return 1
+  # `ls -d` with no surviving argument lists the cwd, so require the dir first.
+  local snapdir="$hub_dir/models--${model//\//--}/snapshots"
+  [[ -d "$snapdir" ]] || return 1
+  snap=$(ls -d "$snapdir"/*(N/) 2>/dev/null | head -n1)
+  [[ -n "$snap" ]] || return 1
+  local -a ggufs=( "$snap"/**/*.gguf(N) )
+  (( ${#ggufs[@]} )) && {
+    print -r -- "GGUF (llama.cpp) — mlx-vlm has no GGUF loader"
+    return 0
+  }
+  # load_model globs *.safetensors and skips consolidated.safetensors.
+  local -a shards=( "$snap"/**/*.safetensors(N) )
+  local has_weights=0
+  for f in "${shards[@]}"; do
+    [[ "${f:t}" == *consolidated.safetensors ]] && continue
+    has_weights=1
+    break
+  done
+  if (( ! has_weights )); then
+    print -r -- "no .safetensors weights (PyTorch .bin, ONNX, CoreML, or an unfinished download)"
+    return 0
   fi
-  return 0
+  if [[ -f "$snap/config.json" ]]; then
+    qm=$(sed -n 's/.*"quant_method"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$snap/config.json" 2>/dev/null | head -n1)
+    case "${qm:l}" in
+      ""|fp8) ;;
+      *) print -r -- "non-MLX quantization ($qm) — run mlx_vlm.convert to get an MLX copy"
+         return 0 ;;
+    esac
+  fi
+  return 1
+}
+
+# Whether mlx-vlm can serve this model (see _marv_mlx_model_unsupported_reason).
+_marv_mlx_model_supported() {
+  ! _marv_mlx_model_unsupported_reason "$1" "$2" >/dev/null
 }
 
 # Classify a model into a thinking family. Reads model_type from the cached
 # config.json ($2 = HF hub dir), falling back to the id.
 #   qwen | gemma | ministral-reasoning | ministral-instruct | lfm | generic
 _marv_mlx_model_family() {
-  local model="$1" hub_dir="$2" base="${1##*/}" mt="" snap
+  local model="$1" hub_dir="$2" base="${1##*/}" mt="" snap snapdir
   if [[ -n "$hub_dir" ]]; then
-    snap=$(ls -d "$hub_dir/models--${model//\//--}"/snapshots/*(N/) 2>/dev/null | head -n1)
-    [[ -n "$snap" && -f "$snap/config.json" ]] \
-      && mt=$(sed -n 's/.*"model_type"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$snap/config.json" | head -n1)
+    snapdir="$hub_dir/models--${model//\//--}/snapshots"
+    if [[ -d "$snapdir" ]]; then
+      snap=$(ls -d "$snapdir"/*(N/) 2>/dev/null | head -n1)
+      [[ -n "$snap" && -f "$snap/config.json" ]] \
+        && mt=$(sed -n 's/.*"model_type"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$snap/config.json" | head -n1)
+    fi
   fi
   case "$mt" in
     qwen*) echo qwen; return ;;

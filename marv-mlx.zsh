@@ -623,9 +623,10 @@ export HF_HUB_DISABLE_SHARED_BLOBS=1
 
   _marv_mlx_launch() {
     local model="$1" forced_port="${2:-}"
-    if ! _marv_mlx_model_supported "$model" "$hub_dir"; then
-      echo "marv-mlx: $model is a GGUF repo — mlx-vlm cannot load GGUF."
-      echo "Pick an MLX-quantized repo instead (e.g. mlx-community/…-4bit)."
+    local unsupported
+    if unsupported=$(_marv_mlx_model_unsupported_reason "$model" "$hub_dir"); then
+      echo "marv-mlx: $model can't be served — $unsupported."
+      echo "MLX-quantized repos run directly (e.g. mlx-community/…-4bit)."
       return 1
     fi
     local port
@@ -899,7 +900,9 @@ export HF_HUB_DISABLE_SHARED_BLOBS=1
       echo
       for model in "${dl[@]}"; do
         echo "  ▶ $model"
-        if ! _marv_mlx_model_supported "$model" "$hub_dir"; then
+        # Id-only check (no hub dir): a half-cached snapshot must still be
+        # re-downloadable, while a GGUF id is nonsensical to fetch here.
+        if _marv_mlx_model_unsupported_reason "$model" >/dev/null; then
           echo "    GGUF is not loadable by mlx-vlm — pick an MLX-quantized repo."
           ok=0
           continue
@@ -1948,9 +1951,10 @@ PY
 
   _marv_mlx_headless_launch() {
     local model="$1"
-    if ! _marv_mlx_model_supported "$model" "$hub_dir"; then
-      print -u2 "marv-mlx: $model is a GGUF repo — mlx-vlm cannot load GGUF."
-      print -u2 "Pick an MLX-quantized repo instead (e.g. mlx-community/…-4bit)."
+    local unsupported
+    if unsupported=$(_marv_mlx_model_unsupported_reason "$model" "$hub_dir"); then
+      print -u2 "marv-mlx: $model can't be served — $unsupported."
+      print -u2 "MLX-quantized repos run directly (e.g. mlx-community/…-4bit)."
       return 1
     fi
     local port=11500

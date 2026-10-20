@@ -26,6 +26,9 @@ mk() { # model-id model_type-or-empty
   local id="$1" mt="$2" dir="$hub/models--${1//\//--}/snapshots/abc"
   mkdir -p "$dir"
   [[ -n "$mt" ]] && print -r -- "{\"model_type\": \"$mt\"}" > "$dir/config.json"
+  # A real MLX/HF snapshot always carries weights; without them the model is
+  # filtered as unloadable (see the format tests below).
+  print -r -- x > "$dir/model.safetensors"
 }
 
 mk "acme/Qwen3.5-9B" qwen3_5
@@ -52,25 +55,61 @@ check $'variant\tbracket\t1' "$(_marv_mlx_thinking_spec acme/Ministral-3-8B-Reas
 check $'variant\tnone\t0' "$(_marv_mlx_thinking_spec acme/Ministral-3-8B-Instruct-2512-4bit "$hub")" "ministral-i spec"
 check $'none\tthink\t0' "$(_marv_mlx_thinking_spec acme/LFM2.5-8B "$hub")" "lfm spec"
 
-# --- GGUF filtering -----------------------------------------------------------
-# A cached GGUF repo can never be served by mlx-vlm, so the model lists drop it.
-# Two signals: the id says GGUF, or the snapshot holds a .gguf file.
-mk "acme/Llama-3.2-3B-GGUF" ""               # id signal (no snapshot files)
+# --- Format support: only MLX-loadable repos are listed -----------------------
+# mlx-vlm reads *.safetensors (MLX-quantized, or plain bf16/fp16 HF) and nothing
+# else: no GGUF, no PyTorch .bin/ONNX/CoreML, no foreign weight packing.
+mk "acme/Llama-3.2-3B-GGUF" ""               # id signal (no gguf file needed)
 mk "acme/Oddly-Named-4bit" ""                  # file signal below
 print -r -- x > "$hub/models--acme--Oddly-Named-4bit/snapshots/abc/model-Q4_K_M.gguf"
 mk "acme/Nested-GGUF-Dir" ""
 mkdir -p "$hub/models--acme--Nested-GGUF-Dir/snapshots/abc/q4"
 print -r -- x > "$hub/models--acme--Nested-GGUF-Dir/snapshots/abc/q4/model.gguf"
+mk "acme/PyTorch-Only-7B" ""
+rm -f "$hub/models--acme--PyTorch-Only-7B/snapshots/abc/model.safetensors"
+print -r -- x > "$hub/models--acme--PyTorch-Only-7B/snapshots/abc/pytorch_model.bin"
+mk "acme/Consolidated-Only" ""
+rm -f "$hub/models--acme--Consolidated-Only/snapshots/abc/model.safetensors"
+print -r -- x > "$hub/models--acme--Consolidated-Only/snapshots/abc/consolidated.safetensors"
+mk "acme/Sharded-4bit" ""
+rm -f "$hub/models--acme--Sharded-4bit/snapshots/abc/model.safetensors"
+print -r -- x > "$hub/models--acme--Sharded-4bit/snapshots/abc/model-00001-of-00002.safetensors"
+for qm in gptq bitsandbytes awq compressed-tensors; do
+  mk "acme/Packed-$qm" ""
+  print -r -- "{\"model_type\": \"qwen3_5\", \"quantization_config\": {\"quant_method\": \"$qm\"}}" \
+    > "$hub/models--acme--Packed-$qm/snapshots/abc/config.json"
+done
+mk "acme/Fp8-DeepSeek" ""
+print -r -- '{"model_type": "deepseek_v3", "quantization_config": {"quant_method": "fp8"}}' \
+  > "$hub/models--acme--Fp8-DeepSeek/snapshots/abc/config.json"
+mk "acme/MLX-Quantized" ""
+print -r -- '{"model_type": "qwen3_5", "quantization": {"group_size": 64, "bits": 4}}' \
+  > "$hub/models--acme--MLX-Quantized/snapshots/abc/config.json"
 
 supported() { # model-id -> yes|no
   _marv_mlx_model_supported "$1" "$hub" && print yes || print no
 }
 check yes "$(supported acme/Qwen3.5-9B)" "supported: MLX repo"
+check yes "$(supported acme/MLX-Quantized)" "supported: MLX quantization block"
+check yes "$(supported acme/Fp8-DeepSeek)" "supported: fp8 quantization_config"
+check yes "$(supported acme/Sharded-4bit)" "supported: sharded safetensors"
+check yes "$(supported acme/Not-Downloaded-4bit)" "supported: unknown id assumed MLX"
 check no  "$(supported acme/Llama-3.2-3B-GGUF)" "supported: -GGUF id rejected"
 check no  "$(supported acme/Oddly-Named-4bit)" "supported: .gguf in snapshot rejected"
 check no  "$(supported acme/Nested-GGUF-Dir)" "supported: nested .gguf rejected"
 check no  "$(supported acme/Lowercase-Gguf)" "supported: case-insensitive gguf id"
-check yes "$(supported acme/Not-Downloaded-4bit)" "supported: unknown id assumed MLX"
+check no  "$(supported acme/PyTorch-Only-7B)" "supported: pytorch_model.bin rejected"
+check no  "$(supported acme/Consolidated-Only)" "supported: consolidated.safetensors alone rejected"
+for qm in gptq bitsandbytes awq compressed-tensors; do
+  check no "$(supported acme/Packed-$qm)" "supported: $qm packing rejected"
+done
+check "no .safetensors weights (PyTorch .bin, ONNX, CoreML, or an unfinished download)" \
+  "$(_marv_mlx_model_unsupported_reason acme/PyTorch-Only-7B "$hub")" \
+  "unsupported reason: no safetensors"
+check "GGUF (llama.cpp) — mlx-vlm has no GGUF loader" \
+  "$(_marv_mlx_model_unsupported_reason acme/Llama-3.2-3B-GGUF "$hub")" \
+  "unsupported reason: GGUF"
+check "" "$(_marv_mlx_model_unsupported_reason acme/Qwen3.5-9B "$hub")" \
+  "unsupported reason: empty for a servable model"
 
 # Launch flags: resolved --enable-thinking + Ministral markers.
 MARV_MLX_QUICK_THINKING=on

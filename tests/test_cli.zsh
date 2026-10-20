@@ -27,9 +27,16 @@ mkdir -p "$hub/models--acme--Qwen3.5-9B/snapshots/abc" \
          "$hub/models--acme--gemma-4-12B/snapshots/abc"
 print -r -- '{"model_type": "qwen3_5"}'    > "$hub/models--acme--Qwen3.5-9B/snapshots/abc/config.json"
 print -r -- '{"model_type": "gemma4_unified"}' > "$hub/models--acme--gemma-4-12B/snapshots/abc/config.json"
-# A cached GGUF repo: mlx-vlm cannot load it, so the model lists must skip it.
-mkdir -p "$hub/models--acme--Llama-3B-GGUF/snapshots/abc"
+for m in Qwen3.5-9B gemma-4-12B; do
+  print -r -- x > "$hub/models--acme--$m/snapshots/abc/model.safetensors"
+done
+# Repos mlx-vlm cannot serve: a cached GGUF one and a PyTorch-only one. The
+# model lists must skip both (`list --all` still shows them).
+mkdir -p "$hub/models--acme--Llama-3B-GGUF/snapshots/abc" \
+         "$hub/models--acme--Torch-Only-7B/snapshots/abc"
 print -r -- x > "$hub/models--acme--Llama-3B-GGUF/snapshots/abc/model-Q4_K_M.gguf"
+print -r -- '{"model_type": "qwen3_5"}' > "$hub/models--acme--Torch-Only-7B/snapshots/abc/config.json"
+print -r -- x > "$hub/models--acme--Torch-Only-7B/snapshots/abc/pytorch_model.bin"
 
 # --- Stub tools on PATH so the pre-dispatch tool check passes ------------------
 bin="$tmp/bin"
@@ -79,17 +86,23 @@ check ok "$(print -r -- "$out" | python3 -c 'import json,sys; json.load(sys.stdi
   "list --json is valid JSON"
 check 2 "$(print -r -- "$out" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')" \
   "list --json has 2 entries"
-# The cached GGUF repo is hidden by default but still inspectable.
+# Repos mlx-vlm cannot serve are hidden by default but still inspectable.
 [[ "$(marv-mlx list 2>/dev/null)" != *GGUF* ]] && print "ok: list hides GGUF repos" \
   || { print -u2 "FAIL: list shows a GGUF repo"; fail=1; }
-check 3 "$(marv-mlx list --all 2>/dev/null | wc -l | tr -d ' ')" "list --all includes GGUF repos"
+[[ "$(marv-mlx list 2>/dev/null)" != *Torch-Only* ]] && print "ok: list hides PyTorch-only repos" \
+  || { print -u2 "FAIL: list shows a PyTorch-only repo"; fail=1; }
+check 4 "$(marv-mlx list --all 2>/dev/null | wc -l | tr -d ' ')" "list --all includes unservable repos"
 check 2 "$(marv-mlx list --bogus >/dev/null 2>&1; echo $?)" "list rejects unknown flags"
 
-# Launching a GGUF model fails fast with an explanation instead of a traceback.
+# Launching an unloadable model fails fast with an explanation, not a traceback.
 err=$(marv-mlx run acme/Llama-3B-GGUF 2>&1 >/dev/null); rc=$?
 check 1 "$rc" "run on a GGUF repo exits 1"
-[[ "$err" == *"cannot load GGUF"* ]] && print "ok: run explains GGUF is unsupported" \
+[[ "$err" == *"GGUF"* ]] && print "ok: run explains GGUF is unsupported" \
   || { print -u2 "FAIL: run GGUF message missing: $err"; fail=1; }
+err=$(marv-mlx run acme/Torch-Only-7B 2>&1 >/dev/null); rc=$?
+check 1 "$rc" "run on a PyTorch-only repo exits 1"
+[[ "$err" == *"no .safetensors weights"* ]] && print "ok: run explains missing safetensors" \
+  || { print -u2 "FAIL: run safetensors message missing: $err"; fail=1; }
 err=$(marv-mlx run acme/Llama-3.2-3B-GGUF 2>&1 >/dev/null); rc=$?
 check 1 "$rc" "run rejects a GGUF id that is not downloaded yet"
 
