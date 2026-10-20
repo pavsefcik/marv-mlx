@@ -52,6 +52,26 @@ check $'variant\tbracket\t1' "$(_marv_mlx_thinking_spec acme/Ministral-3-8B-Reas
 check $'variant\tnone\t0' "$(_marv_mlx_thinking_spec acme/Ministral-3-8B-Instruct-2512-4bit "$hub")" "ministral-i spec"
 check $'none\tthink\t0' "$(_marv_mlx_thinking_spec acme/LFM2.5-8B "$hub")" "lfm spec"
 
+# --- GGUF filtering -----------------------------------------------------------
+# A cached GGUF repo can never be served by mlx-vlm, so the model lists drop it.
+# Two signals: the id says GGUF, or the snapshot holds a .gguf file.
+mk "acme/Llama-3.2-3B-GGUF" ""               # id signal (no snapshot files)
+mk "acme/Oddly-Named-4bit" ""                  # file signal below
+print -r -- x > "$hub/models--acme--Oddly-Named-4bit/snapshots/abc/model-Q4_K_M.gguf"
+mk "acme/Nested-GGUF-Dir" ""
+mkdir -p "$hub/models--acme--Nested-GGUF-Dir/snapshots/abc/q4"
+print -r -- x > "$hub/models--acme--Nested-GGUF-Dir/snapshots/abc/q4/model.gguf"
+
+supported() { # model-id -> yes|no
+  _marv_mlx_model_supported "$1" "$hub" && print yes || print no
+}
+check yes "$(supported acme/Qwen3.5-9B)" "supported: MLX repo"
+check no  "$(supported acme/Llama-3.2-3B-GGUF)" "supported: -GGUF id rejected"
+check no  "$(supported acme/Oddly-Named-4bit)" "supported: .gguf in snapshot rejected"
+check no  "$(supported acme/Nested-GGUF-Dir)" "supported: nested .gguf rejected"
+check no  "$(supported acme/Lowercase-Gguf)" "supported: case-insensitive gguf id"
+check yes "$(supported acme/Not-Downloaded-4bit)" "supported: unknown id assumed MLX"
+
 # Launch flags: resolved --enable-thinking + Ministral markers.
 MARV_MLX_QUICK_THINKING=on
 local -a flags

@@ -548,6 +548,34 @@ async function wireMarvMlx(ui: SetupUI): Promise<boolean> {
 /* ------------------------------------------------------------------ */
 
 /**
+ * Whether mlx-vlm can serve this model at all. GGUF repos cannot (neither
+ * mlx-vlm nor mlx-lm ships a GGUF loader), so they must not be registered as
+ * pi models — mirrored from `_marv_mlx_model_supported` in marv-mlx's zsh
+ * helpers. Detected by id or by a .gguf file inside a cached snapshot.
+ */
+async function isServableModel(id: string, dir: string): Promise<boolean> {
+  if (/gguf/i.test(id)) return false;
+  const snapshots = join(dir, "snapshots");
+  let revs;
+  try {
+    revs = await readdir(snapshots, { withFileTypes: true });
+  } catch {
+    return true; // no snapshot yet: nothing contradicts it being MLX
+  }
+  for (const rev of revs) {
+    if (!rev.isDirectory()) continue;
+    let files;
+    try {
+      files = await readdir(join(snapshots, rev.name), { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    if (files.some((f) => /\.[Gg][Gg][Uu][Ff]$/.test(f.name))) return false;
+  }
+  return true;
+}
+
+/**
  * Discover local MLX models from the HF hub cache. `models--ORG--NAME`
  * directories become `ORG/NAME` model ids, exactly like marv-mlx's enumerator.
  */
@@ -563,6 +591,7 @@ async function discoverModels(): Promise<LocalModel[]> {
   for (const entry of entries) {
     if (!entry.isDirectory() || !entry.name.startsWith("models--")) continue;
     const id = entry.name.slice("models--".length).replace(/--/g, "/");
+    if (!(await isServableModel(id, join(HUB_DIR, entry.name)))) continue;
     models.push({
       id,
       name: id, // id is the exact string `marv-mlx run <id>` expects

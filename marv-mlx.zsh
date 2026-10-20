@@ -623,6 +623,11 @@ export HF_HUB_DISABLE_SHARED_BLOBS=1
 
   _marv_mlx_launch() {
     local model="$1" forced_port="${2:-}"
+    if ! _marv_mlx_model_supported "$model" "$hub_dir"; then
+      echo "marv-mlx: $model is a GGUF repo — mlx-vlm cannot load GGUF."
+      echo "Pick an MLX-quantized repo instead (e.g. mlx-community/…-4bit)."
+      return 1
+    fi
     local port
     if [[ -n "$forced_port" ]]; then
       port="$forced_port"
@@ -894,6 +899,11 @@ export HF_HUB_DISABLE_SHARED_BLOBS=1
       echo
       for model in "${dl[@]}"; do
         echo "  ▶ $model"
+        if ! _marv_mlx_model_supported "$model" "$hub_dir"; then
+          echo "    GGUF is not loadable by mlx-vlm — pick an MLX-quantized repo."
+          ok=0
+          continue
+        fi
         if ! uvx --from mlx-vlm python3 -c "from mlx_vlm.utils import load; load('$model')"; then
           ok=0
         fi
@@ -1305,6 +1315,16 @@ PY
 
     _MARV_MLX_MENU_NO_MODELS=0
     models=$(ls "$hub_dir" 2>/dev/null | grep '^models--' | sed 's/models--//' | sed 's/--/\//g')
+    # Drop repos mlx-vlm cannot load (GGUF): they would only fail at launch.
+    # Filtering on capability rather than on an "mlx" in the id keeps locally
+    # converted models, whose names need not mention mlx, in the list.
+    if [[ -n "$models" ]]; then
+      local -a supported=() dl_model
+      for dl_model in ${(f)models}; do
+        _marv_mlx_model_supported "$dl_model" "$hub_dir" && supported+=( "$dl_model" )
+      done
+      models="${(F)supported}"
+    fi
     if [[ -z "$models" ]]; then
       _MARV_MLX_MENU_NO_MODELS=1
       _MARV_MLX_MENU_LINES=( "Download your first model" "──────────────────────" "Chat history" "──────────────────────" "Basic settings" "Advanced settings" "──────────────────────" "Stop & quit" )
@@ -1928,6 +1948,11 @@ PY
 
   _marv_mlx_headless_launch() {
     local model="$1"
+    if ! _marv_mlx_model_supported "$model" "$hub_dir"; then
+      print -u2 "marv-mlx: $model is a GGUF repo — mlx-vlm cannot load GGUF."
+      print -u2 "Pick an MLX-quantized repo instead (e.g. mlx-community/…-4bit)."
+      return 1
+    fi
     local port=11500
     if ! _marv_mlx_port_free "$port"; then
       print -u2 "marv-mlx: port 11500 is busy — stop the running model first (marv-mlx stop)"
@@ -2044,13 +2069,24 @@ PY
   }
 
   _marv_mlx_headless_list() {
-    local json=0
-    [[ "$1" == "--json" ]] && json=1
+    local json=0 all=0 arg
+    for arg in "$@"; do
+      case "$arg" in
+        --json) json=1 ;;
+        --all)  all=1 ;;   # include repos mlx-vlm cannot serve (e.g. GGUF)
+        *) print -u2 "usage: marv-mlx list [--json] [--all]"; return 2 ;;
+      esac
+    done
     local -a models=( "$hub_dir"/models--*(N/) )
     local -a ids=()
     local m id
     for m in "${models[@]}"; do
-      id="${${m:t}#models--}"; ids+=( "${id//--//}" )
+      id="${${m:t}#models--}"; id="${id//--//}"
+      # GGUF repos can never be served by mlx-vlm; keep them out of the list
+      # (they stay reachable via `marv-mlx list --all`).
+      if (( all )) || _marv_mlx_model_supported "$id" "$hub_dir"; then
+        ids+=( "$id" )
+      fi
     done
     # LC_ALL=C pins byte order so scripts see the same order on any machine
     # (zsh's (o) flag follows the locale and varies between hosts).

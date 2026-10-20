@@ -202,7 +202,7 @@ Usage:
   marv-mlx chat <model>           start a model and open the built-in chat REPL
   marv-mlx stop [<model>|--all]   stop a running model (default: the one on :11500)
   marv-mlx status [--json]        show what is running
-  marv-mlx list [--json]          list locally installed models
+  marv-mlx list [--json] [--all]  list installed models mlx-vlm can serve
   marv-mlx download <model>...    download model(s) from the HuggingFace Hub
   marv-mlx curated [--json]       show the full curated model catalog (all tiers)
   marv-mlx info <model> [--json]  show details for a model (size, family, thinking)
@@ -384,6 +384,27 @@ _marv_mlx_ministral_sibling() {
 #   mlx-community/Ministral-3-3B-Instruct-2512-4bit -> Ministral-3-3B-4bit
 _marv_mlx_ministral_base() {
   print -r -- "$(print -r -- "${1##*/}" | sed -E 's/-([Ii]nstruct|[Rr]easoning)-[^-]+-/-/')"
+}
+
+# Whether mlx-vlm can actually serve this model. GGUF repos are not: neither
+# mlx-vlm nor mlx-lm has a GGUF loader, so such a repo would only fail at
+# launch. Detect it by id (`…-GGUF`, `Quants/Q4_K_M.gguf`, …) or by a .gguf
+# file in the cached snapshot (covers oddly named repos).
+#   $1 = model id (e.g. mlx-community/Qwen3-4B-4bit)
+#   $2 = HF hub dir (optional; id-only check when empty)
+# Returns 0 when servable, 1 otherwise.
+_marv_mlx_model_supported() {
+  local model="$1" hub_dir="$2" snap
+  [[ -z "$model" ]] && return 0
+  [[ "${model:l}" == *gguf* ]] && return 1
+  if [[ -n "$hub_dir" ]]; then
+    snap=$(ls -d "$hub_dir/models--${model//\//--}"/snapshots/*(N/) 2>/dev/null | head -n1)
+    if [[ -n "$snap" ]]; then
+      local -a ggufs=( "$snap"/**/*.gguf(N) )
+      (( ${#ggufs[@]} )) && return 1
+    fi
+  fi
+  return 0
 }
 
 # Classify a model into a thinking family. Reads model_type from the cached
