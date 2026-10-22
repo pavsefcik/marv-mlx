@@ -15,6 +15,9 @@ The coding sniper
 mlx-community/gemma-4-12B-it-qat-OptiQ-4bit
 The creative writer
 
+TheCluster/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-MLX-mxfp4
+The uncensored savage
+
 prism-ml/Ternary-Bonsai-2-27B-mlx-2bit
 The efficiency experiment
 
@@ -29,3 +32,6 @@ The agentic king
 
 mlx-community/gemma-4-31B-it-qat-OptiQ-4bit
 The creative flagship
+
+TheCluster/Qwen3.5-27B-Uncensored-HauhauCS-Aggressive-MLX-mxfp4
+The F-bomb monster
