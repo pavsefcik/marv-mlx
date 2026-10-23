@@ -13,7 +13,8 @@ to them.
 user ──► marv   (harness: agent loop · tools · sessions · TUI)
             │  OpenAI-compatible HTTP :11500 + lifecycle CLI
             ▼
-         marv-mlx (runtime: catalog · download · run/swap · mlx_vlm.server)
+         marv-mlx (runtime: catalog · download · run/swap · mlx_vlm.server
+                                or the bundled streaming-MoE engine)
             │
             ▼
          Hugging Face hub + Apple Silicon (MLX)
@@ -164,10 +165,30 @@ ports `11500–11509` are a TUI-only feature.
   screen: base URL `http://localhost:11500/v1`, model = HF id of the running
   model, API key not required
 
+## Streaming MoE (large experts, small RAM)
+
+marv-mlx ships its own routed-expert engine, built into this repo
+(`lib/marv_mlx_moe/`). When a loaded model is a compatible MoE — an MLX
+affine-quantized `qwen3_5_moe` checkpoint (Qwen3.5/3.6 MoE, Ornith) with
+`switch_mlp` expert tensors in the original safetensors shards — the launch
+command is routed through that engine instead of `mlx_vlm.server`. Nothing has
+to be repacked or converted: the shared core stays resident while selected
+experts are read with `os.pread` and held in a bounded LFU RAM cache.
+
+Compatibility is detected from the cached `config.json`; every other model keeps
+using `mlx_vlm.server` unchanged. The default streaming budget is 6 GiB and is
+set in **Basic settings → MoE cache (GB)** (or `MARV_MLX_MOE_CACHE_GB` in
+`config.zsh`). A bigger budget means fewer SSD reads.
+
+The curated 32 GB entry `mlx-community/Ornith-1.5-35B-A3B-OptiQ-4bit`
+(“The agentic king”) is built for this path: Ornith is built on Qwen, and its
+OptiQ mixed 4/8-bit checkpoint streams per projection (the engine reads each
+projection's own quantization parameters).
+
 ## Configuration
 
-**Basic settings** — thinking (default/on/off), temperature, max tokens, system
-prompt. **Advanced settings** — every `mlx_vlm` flag (`--kv-bits`,
+**Basic settings** — thinking (default/on/off), temperature, max tokens, MoE
+expert-cache budget, system prompt. **Advanced settings** — every `mlx_vlm` flag (`--kv-bits`,
 `--draft-model`, adapters, extra model slots, …). Everything persists in
 `~/.cache/marv/mlx/config.zsh`.
 
@@ -188,4 +209,4 @@ when one exists a
 **Update to latest version** entry that pulls and reinstalls in place (a
 pi-managed install instead guides you to `pi update`; a curl/managed copy is
 refreshed from GitHub automatically). Installed version lives
-in the repo-root `VERSION` file (semver, currently 0.138.0).
+in the repo-root `VERSION` file (semver, currently 0.139.0).

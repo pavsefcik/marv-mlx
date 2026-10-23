@@ -47,6 +47,7 @@ import {
   access,
   chmod,
   copyFile,
+  cp,
   mkdir,
   readFile,
   readdir,
@@ -491,6 +492,12 @@ async function wireMarvMlx(ui: SetupUI): Promise<boolean> {
       await copyFile(
         join(dirname(zsh), "lib", "marv_mlx_repl.py"),
         join(MARV_MLX_STABLE, "lib", "marv_mlx_repl.py")
+      );
+      // Streaming routed-expert engine for compatible MoE checkpoints.
+      await cp(
+        join(dirname(zsh), "lib", "marv_mlx_moe"),
+        join(MARV_MLX_STABLE, "lib", "marv_mlx_moe"),
+        { recursive: true }
       );
       // APC sitecustomize payload (installed into the mlx-vlm tool env by
       // installApcSitecustomize below).

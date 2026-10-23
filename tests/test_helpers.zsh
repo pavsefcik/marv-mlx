@@ -39,6 +39,19 @@ mk "acme/Ministral-3-8B-Instruct-2512-4bit" mistral3
 mk "acme/LFM2.5-8B" lfm2_moe
 mk "acme/SomeModel" ""                       # name fallback
 mk "acme/Mystery-Qwen-X" ""                  # name fallback
+# MoE streaming compatibility: qwen3_5_moe + affine switch_mlp quantization.
+mk "acme/Ornith-MoE-4bit" qwen3_5_moe
+cat > "$hub/models--acme--Ornith-MoE-4bit/snapshots/abc/config.json" <<'MOECFG'
+{"model_type":"qwen3_5_moe","quantization":{"group_size":64,"bits":4,"mode":"affine","language_model.model.layers.0.mlp.switch_mlp.gate_proj":{"bits":8,"group_size":64}}}
+MOECFG
+mk "acme/Unquantized-MoE" qwen3_5_moe
+cat > "$hub/models--acme--Unquantized-MoE/snapshots/abc/config.json" <<'MOECFG'
+{"model_type":"qwen3_5_moe","quantization_config":{"quant_method":"gptq"},"language_model.model.layers.0.mlp.switch_mlp.gate_proj":{}}
+MOECFG
+mk "acme/Mxfp4-MoE" qwen3_5_moe
+cat > "$hub/models--acme--Mxfp4-MoE/snapshots/abc/config.json" <<'MOECFG'
+{"model_type":"qwen3_5_moe","quantization":{"group_size":32,"bits":4,"mode":"mxfp4","language_model.model.layers.0.mlp.switch_mlp.gate_proj":{}}}
+MOECFG
 
 check qwen "$(_marv_mlx_model_family acme/Qwen3.5-9B "$hub")" "qwen3_5 -> qwen"
 check qwen "$(_marv_mlx_model_family acme/Qwen3.6-MoE "$hub")" "qwen3_5_moe -> qwen"
@@ -110,6 +123,26 @@ check "GGUF (llama.cpp) — mlx-vlm has no GGUF loader" \
   "unsupported reason: GGUF"
 check "" "$(_marv_mlx_model_unsupported_reason acme/Qwen3.5-9B "$hub")" \
   "unsupported reason: empty for a servable model"
+
+# --- Streaming MoE routing ----------------------------------------------------
+moe() { _marv_mlx_moe_compatible "$1" "$hub" && print yes || print no; }
+check no  "$(moe acme/Qwen3.5-9B)"          "moe: dense model stays on mlx_vlm.server"
+check yes "$(moe acme/Ornith-MoE-4bit)"     "moe: affine qwen3_5_moe is compatible"
+check no  "$(moe acme/Unquantized-MoE)"     "moe: non-MLX packing rejected"
+check no  "$(moe acme/Mxfp4-MoE)"           "moe: non-affine quantization rejected"
+
+MARV_MLX_PYTHON=/usr/bin/python3
+MARV_MLX_MOE_CACHE_GB=5
+local -a reply
+_marv_mlx_build_server_argv acme/Ornith-MoE-4bit 11500 "$hub" --max-tokens 9
+check "python3/-m/marv_mlx_moe.server" "${reply[1]:t}/${reply[2]}/${reply[3]}" \
+  "moe argv: bundled streaming server"
+check "1" "$(( ${reply[(I)--cache-gb]} > 0 ))" "moe argv: cache budget passed"
+check "5" "${reply[$(( ${reply[(I)--cache-gb]} + 1 ))]}" "moe argv: cache budget value"
+check "9" "${reply[$(( ${reply[(I)--max-tokens]} + 1 ))]}" "moe argv: server flags forwarded"
+
+_marv_mlx_build_server_argv acme/Qwen3.5-9B 11500 "$hub" --max-tokens 9
+check "mlx_vlm.server" "${reply[1]}" "dense argv: stock mlx-vlm server"
 
 # Launch flags: resolved --enable-thinking + Ministral markers.
 MARV_MLX_QUICK_THINKING=on

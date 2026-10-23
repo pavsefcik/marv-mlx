@@ -448,6 +448,106 @@ _marv_mlx_model_supported() {
   ! _marv_mlx_model_unsupported_reason "$1" "$2" >/dev/null
 }
 
+# Whether marv-mlx's streaming routed-expert engine can serve this model.
+# Compatible = MLX affine-quantized checkpoint whose router-selected experts live
+# in switch_mlp tensors we can read from the original safetensors shards. Only
+# such models are launched through lib/marv_mlx_moe; everything else keeps using
+# mlx_vlm.server. $1 = model id, $2 = HF hub dir.
+_marv_mlx_moe_compatible() {
+  local model="$1" hub_dir="$2" snap snapdir cfg index
+  [[ -n "$model" && -n "$hub_dir" ]] || return 1
+  snapdir="$hub_dir/models--${model//\//--}/snapshots"
+  [[ -d "$snapdir" ]] || return 1
+  snap=$(ls -d "$snapdir"/*(N/) 2>/dev/null | head -n1)
+  [[ -n "$snap" ]] || return 1
+  cfg="$snap/config.json"
+  [[ -f "$cfg" ]] || return 1
+  # Qwen3.5/3.6 MoE family (Ornith is built on it).
+  grep -q '"model_type"[[:space:]]*:[[:space:]]*"qwen3_5_moe"' "$cfg" 2>/dev/null || return 1
+  # Need routed experts and an MLX quantization block (scales/biases).
+  if ! grep -q 'switch_mlp' "$cfg" 2>/dev/null; then
+    index="$snap/model.safetensors.index.json"
+    [[ -f "$index" ]] && grep -q 'switch_mlp' "$index" 2>/dev/null || return 1
+  fi
+  grep -q '"quantization"[[:space:]]*:' "$cfg" 2>/dev/null || return 1
+  # Only affine quantization has the biases tensor gather_qmm needs here.
+  if grep -q '"mode"[[:space:]]*:' "$cfg" 2>/dev/null; then
+    grep -q '"mode"[[:space:]]*:[[:space:]]*"affine"' "$cfg" 2>/dev/null || return 1
+  fi
+  local -a shards=( "$snap"/**/*.safetensors(N) )
+  (( ${#shards[@]} > 0 )) || return 1
+  return 0
+}
+
+# Python interpreter of the mlx-vlm uv tool env. The streaming MoE engine runs
+# as a module from that env (mlx, mlx-vlm, fastapi and uvicorn all live there).
+# MARV_MLX_PYTHON overrides the lookup (tests / unusual installs).
+_marv_mlx_mlx_python() {
+  local tools_dir py srv shebang
+  if [[ -n "${MARV_MLX_PYTHON:-}" ]]; then
+    print -r -- "$MARV_MLX_PYTHON"
+    return 0
+  fi
+  tools_dir="$(uv tool dir 2>/dev/null)"
+  [[ -n "$tools_dir" && -d "$tools_dir" ]] || tools_dir="$HOME/.local/share/uv/tools"
+  for py in "$tools_dir"/mlx-vlm/bin/python3 "$tools_dir"/mlx-vlm/bin/python; do
+    [[ -x "$py" ]] && { print -r -- "$py"; return 0; }
+  done
+  srv="$(command -v mlx_vlm.server 2>/dev/null)"
+  if [[ -n "$srv" ]]; then
+    IFS= read -r shebang < "$srv" 2>/dev/null || true
+    shebang="${shebang#\#\!}"
+    shebang="${shebang%% *}"
+    [[ -x "$shebang" ]] && { print -r -- "$shebang"; return 0; }
+  fi
+  command -v python3
+}
+
+# Download one model repo without loading it. The old path called
+# mlx_vlm.utils.load(), which materializes the whole checkpoint in RAM — fine for
+# a 4B model, fatal for a 35B MoE on a 16/18 GB Mac. snapshot_download only
+# fetches the files marv-mlx actually needs.
+_marv_mlx_snapshot_download() {
+  local model="$1"
+  [[ -n "$model" ]] || return 2
+  uvx --from mlx-vlm python3 - "$model" <<'PYDL'
+import sys
+from huggingface_hub import snapshot_download
+
+snapshot_download(
+    repo_id=sys.argv[1],
+    allow_patterns=[
+        "*.json",
+        "*.safetensors",
+        "*.py",
+        "*.model",
+        "*.tiktoken",
+        "*.txt",
+        "*.jinja",
+    ],
+)
+PYDL
+}
+
+# Build the server argv into the global `reply` array. MoE-compatible models run
+# through the bundled streaming engine; all others through mlx_vlm.server.
+# $1 = model id, $2 = port, $3 = HF hub dir, remaining args = server flags.
+_marv_mlx_build_server_argv() {
+  local model="$1" port="$2" hub_dir="$3"
+  shift 3
+  local -a server_flags=( "$@" )
+  if _marv_mlx_moe_compatible "$model" "$hub_dir"; then
+    local py cache_gb
+    py="$(_marv_mlx_mlx_python)" || return 1
+    cache_gb="${MARV_MLX_MOE_CACHE_GB:-6}"
+    reply=( "$py" -m marv_mlx_moe.server --model "$model" --port "$port" \
+      --cache-gb "$cache_gb" "${server_flags[@]}" )
+  else
+    reply=( mlx_vlm.server --model "$model" --port "$port" "${server_flags[@]}" )
+  fi
+  return 0
+}
+
 # Classify a model into a thinking family. Reads model_type from the cached
 # config.json ($2 = HF hub dir), falling back to the id.
 #   qwen | gemma | ministral-reasoning | ministral-instruct | lfm | generic

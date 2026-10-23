@@ -110,6 +110,7 @@ MARV_MLX_QUICK_THINKING="default"      # default | on | off  (default = use mode
 MARV_MLX_QUICK_TEMP=""                 # e.g. 0.7, or empty to use MARV_MLX_CHAT_FLAGS default
 MARV_MLX_QUICK_MAX_TOKENS=""           # e.g. 2048, or empty to use MARV_MLX_CHAT_FLAGS default
 MARV_MLX_QUICK_SYSTEM_PROMPT=""        # chat only; empty disables
+MARV_MLX_QUICK_MOE_CACHE=""            # GiB for streaming MoE experts (empty = 6)
 # <<< end marv-mlx-managed >>>
 
 # CHAT_FLAGS are informational: the built-in REPL talks to the running server
@@ -168,6 +169,7 @@ CFG
   typeset -g MARV_MLX_QUICK_TEMP=""
   typeset -g MARV_MLX_QUICK_MAX_TOKENS=""
   typeset -g MARV_MLX_QUICK_SYSTEM_PROMPT=""
+  typeset -g MARV_MLX_QUICK_MOE_CACHE=""
   typeset -g _MARV_MLX_TMP_CFG=""
   typeset -g _MARV_MLX_STTY_SAVED=""
   typeset -g _MARV_MLX_MENU_QUIT=0
@@ -335,6 +337,10 @@ CFG
       _marv_mlx_replace_or_append MARV_MLX_CHAT_FLAGS --max-tokens "$MARV_MLX_QUICK_MAX_TOKENS"
       _marv_mlx_replace_or_append MARV_MLX_SERVER_FLAGS --max-tokens "$MARV_MLX_QUICK_MAX_TOKENS"
     fi
+    # Streaming MoE expert-cache budget (GiB). Non-MoE models ignore it.
+    if [[ -n "$MARV_MLX_QUICK_MOE_CACHE" ]]; then
+      export MARV_MLX_MOE_CACHE_GB="$MARV_MLX_QUICK_MOE_CACHE"
+    fi
     # System prompts are per-request only: mlx_vlm has no --system-prompt flag
     # (server or chat), and MARV_MLX_CHAT_FLAGS is informational, so there is
     # nothing to write here — the chat REPL injects MARV_MLX_QUICK_SYSTEM_PROMPT
@@ -355,6 +361,7 @@ CFG
           "MARV_MLX_QUICK_TEMP=${(qq)MARV_MLX_QUICK_TEMP}" \
           "MARV_MLX_QUICK_MAX_TOKENS=${(qq)MARV_MLX_QUICK_MAX_TOKENS}" \
           "MARV_MLX_QUICK_SYSTEM_PROMPT=${(qq)MARV_MLX_QUICK_SYSTEM_PROMPT}" \
+          "MARV_MLX_QUICK_MOE_CACHE=${(qq)MARV_MLX_QUICK_MOE_CACHE}" \
           '# <<< end marv-mlx-managed >>>' \
           ''
       fi
@@ -370,6 +377,7 @@ CFG
             "MARV_MLX_QUICK_TEMP=${(qq)MARV_MLX_QUICK_TEMP}" \
             "MARV_MLX_QUICK_MAX_TOKENS=${(qq)MARV_MLX_QUICK_MAX_TOKENS}" \
             "MARV_MLX_QUICK_SYSTEM_PROMPT=${(qq)MARV_MLX_QUICK_SYSTEM_PROMPT}" \
+            "MARV_MLX_QUICK_MOE_CACHE=${(qq)MARV_MLX_QUICK_MOE_CACHE}" \
             '# <<< end marv-mlx-managed >>>'
           continue
         fi
@@ -400,10 +408,12 @@ CFG
       else
         cur_sys="(none)"
       fi
+      local cur_moe="${MARV_MLX_QUICK_MOE_CACHE:-6}"
       local -a settings_entries=(
         "Thinking:       $cur_t"
         "Temperature:    $cur_temp"
         "Max tokens:     $cur_max"
+        "MoE cache (GB): $cur_moe"
         "System prompt:  $cur_sys"
         "Back to Top"
       )
@@ -430,6 +440,15 @@ CFG
             "Custom…") MARV_MLX_QUICK_MAX_TOKENS=$(gum input --placeholder "e.g. 4096" --value "$MARV_MLX_QUICK_MAX_TOKENS") ;;
             "") ;;
             *) MARV_MLX_QUICK_MAX_TOKENS="$pick" ;;
+          esac
+          ;;
+        "MoE cache (GB):"*)
+          local pick=$(printf "default\n4\n6\n8\n12\n16\nCustom…" | gum choose --header "Streaming MoE expert cache (GiB)")
+          case "$pick" in
+            default) MARV_MLX_QUICK_MOE_CACHE="" ;;
+            "Custom…") MARV_MLX_QUICK_MOE_CACHE=$(gum input --placeholder "e.g. 10" --value "$MARV_MLX_QUICK_MOE_CACHE") ;;
+            "") ;;
+            *) MARV_MLX_QUICK_MOE_CACHE="$pick" ;;
           esac
           ;;
         "System prompt:"*)
@@ -648,9 +667,11 @@ export HF_HUB_DISABLE_SHARED_BLOBS=1
     # conversation every turn (mlx-vlm leaves APC off by default).
     _marv_mlx_export_apc_env "$state_dir"
     # MARV_MLX_PROCTITLE + PYTHONPATH make the server rename itself to the model
-    # name in Activity Monitor / ps (see lib/sitecustomize.py).
+    # name in Activity Monitor / ps (see lib/sitecustomize.py), and let a
+    # compatible MoE load lib/marv_mlx_moe from this checkout.
+    _marv_mlx_build_server_argv "$model" "$port" "$hub_dir" "${launch_flags[@]}"
     MARV_MLX_PROCTITLE="$model" PYTHONPATH="$_MARV_MLX_SRC_DIR/lib${PYTHONPATH:+:$PYTHONPATH}" \
-      mlx_vlm.server --model "$model" --port "$port" "${launch_flags[@]}" >"$log" 2>&1 &
+      "${reply[@]}" >"$log" 2>&1 &
     local pid=$!
     _MARV_MLX_SESSION_PIDS+=( "$pid" )
     local rc=0
@@ -907,7 +928,7 @@ export HF_HUB_DISABLE_SHARED_BLOBS=1
           ok=0
           continue
         fi
-        if ! uvx --from mlx-vlm python3 -c "from mlx_vlm.utils import load; load('$model')"; then
+        if ! _marv_mlx_snapshot_download "$model"; then
           ok=0
         fi
       done
@@ -1971,8 +1992,9 @@ PY
     _marv_mlx_export_apc_env "$state_dir"
     # Rename this server to the model name in Activity Monitor / ps (see
     # lib/sitecustomize.py), so heads-up monitoring shows which model is up.
+    _marv_mlx_build_server_argv "$model" "$port" "$hub_dir" "${launch_flags[@]}"
     MARV_MLX_PROCTITLE="$model" PYTHONPATH="$_MARV_MLX_SRC_DIR/lib${PYTHONPATH:+:$PYTHONPATH}" \
-      mlx_vlm.server --model "$model" --port "$port" "${launch_flags[@]}" >"$log" 2>&1 &!
+      "${reply[@]}" >"$log" 2>&1 &!
     local pid=$!
     print "marv-mlx: starting $model on :$port (pid $pid) — log: $log"
     local i
@@ -1997,6 +2019,17 @@ PY
     if [[ -z "$model" ]]; then
       print -u2 "usage: marv-mlx run <model-id>, e.g. marv-mlx run mlx-community/Qwen3-8B"
       return 2
+    fi
+    # Fetch uncached weights before choosing a backend: the streaming-MoE
+    # compatibility check reads the cached config.json, so a fresh model has to
+    # be on disk first. snapshot_download does not load the model into RAM.
+    if _marv_mlx_model_supported "$model" "$hub_dir" \
+       && [[ ! -d "$hub_dir/models--${model//\//--}/snapshots" ]]; then
+      print -u2 "marv-mlx: downloading $model first (no local snapshot)…"
+      _marv_mlx_snapshot_download "$model" || {
+        print -u2 "marv-mlx: download failed for $model"
+        return 1
+      }
     fi
     # Fast path: the requested model is already serving.
     if [[ -n "$(_marv_mlx_running_model)" ]]; then
@@ -2180,7 +2213,7 @@ PY
     local model rc=0
     for model in "$@"; do
       print -u2 "marv-mlx: downloading $model …"
-      if uvx --from mlx-vlm python3 -c "from mlx_vlm.utils import load; load('$model')"; then
+      if _marv_mlx_snapshot_download "$model"; then
         print -u2 "marv-mlx: downloaded $model"
       else
         print -u2 "marv-mlx: download failed for $model"

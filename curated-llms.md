@@ -10,7 +10,7 @@ The quick wit
 16 GB RAM Tier Models
 
 ornith-ai/Ornith-1.5-9B-MLX-4bit
-The coding sniper
+The agentic sniper
 
 mlx-community/gemma-4-12B-it-qat-OptiQ-4bit
 The creative writer
@@ -27,7 +27,7 @@ The efficiency experiment
 bottlecapai/ThinkingCap-Qwen3.8-27B-MLX-4bit-DWQ
 The deep thinker
 
-ornith-ai/Ornith-1.5-35B-A3B-MLX-4bit
+mlx-community/Ornith-1.5-35B-A3B-OptiQ-4bit
 The agentic king
 
 mlx-community/gemma-4-31B-it-qat-OptiQ-4bit

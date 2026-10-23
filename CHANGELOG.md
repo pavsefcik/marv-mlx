@@ -6,6 +6,72 @@ sync across `VERSION`, `package.json`, and the README.
 
 ## [Unreleased]
 
+## [0.139.0] - 2026-10-23
+
+### Added
+
+- **Streaming MoE engine for compatible checkpoints.** marv-mlx now bundles a
+  routed-expert engine as `lib/marv_mlx_moe/`. When a cached model is an MLX
+  affine-quantized `qwen3_5_moe` checkpoint with `switch_mlp` expert tensors
+  (Qwen3.5/3.6 MoE, Ornith), both launch paths (`_marv_mlx_launch` and
+  `_marv_mlx_headless_launch`) start `python -m marv_mlx_moe.server` instead of
+  `mlx_vlm.server`. The shared core stays resident; only router-selected experts
+  are read from the original safetensors shards with `os.pread` and cached in a
+  bounded LFU RAM cache. No repack or conversion. Mixed per-projection 4/8-bit
+  quantization (OptiQ) is supported because each projection carries its own
+  `gather_qmm` parameters. Every non-compatible model still uses
+  `mlx_vlm.server` unchanged.
+- **`MoE cache (GB)`** in Basic settings, persisted as
+  `MARV_MLX_QUICK_MOE_CACHE` and exported as `MARV_MLX_MOE_CACHE_GB` (default
+  6 GiB). It only affects the streaming MoE backend.
+- **Curated 32 GB tier:** `mlx-community/Ornith-1.5-35B-A3B-OptiQ-4bit`
+  ("The agentic king") replaces the previous Ornith 35B entry. Ornith is built
+  on Qwen3.5/3.6 MoE, so it runs through the streaming engine.
+- **`marv-mlx list --all`** shows every repo in the HuggingFace cache, including
+  the ones the default list now hides because `mlx-vlm` cannot load them.
+
+### Changed
+
+- The bundled catalog and engine default now point at Ornith
+  `mlx-community/Ornith-1.5-35B-A3B-OptiQ-4bit` instead of a Qwen3.6 MoE id.
+- **Only loadable repos are offered as models.** `mlx_vlm.utils.load_model`
+  reads `*.safetensors` (MLX-quantized, or plain bf16/fp16 HuggingFace) and
+  nothing else, so the main menu, `marv-mlx list` and the pi extension's model
+  sync now skip a cached repo when:
+  - its id says GGUF (`…-GGUF`) or its snapshot holds a `.gguf` file —
+    neither mlx-vlm nor mlx-lm ships a GGUF loader;
+  - its snapshot has no usable `.safetensors` (PyTorch `pytorch_model.bin`,
+    ONNX, CoreML, npz-only, `consolidated.safetensors` alone, or an unfinished
+    download) — the loader aborts with "No safetensors found";
+  - its `config.json` packs weights for another runtime
+    (`quantization_config.quant_method` = bitsandbytes/gptq/awq/
+    compressed-tensors/…), which needs `mlx_vlm.convert` first. fp8 and MLX's
+    own `quantization` block are allowed.
+
+  The check is on format, not on an "mlx" in the id, so locally converted
+  models — whose names need not mention mlx — stay listed, and unknown repos
+  (nothing cached yet) are assumed loadable.
+
+### Fixed
+
+- Downloading a model now uses `huggingface_hub.snapshot_download` instead of
+  `mlx_vlm.utils.load()`. The old path materialized the whole checkpoint in RAM
+  just to fetch it, which would OOM on a 35B MoE (and made the new Ornith
+  catalog entry risky to download on a 16/18 GB Mac).
+- Launching or downloading an unloadable model now fails with a one-line
+  explanation of the format problem instead of a traceback in the server log.
+- `_marv_mlx_model_family` no longer resolves a missing snapshot to the current
+  directory (`ls -d` with no surviving argument lists `.`), which could read an
+  unrelated `config.json` from the working directory.
+
+### Tests
+
+- `tests/test_helpers.zsh` covers MoE compatibility detection and the
+  buffer-backed server argv selection.
+- `tests/test_moe_streaming.py` compares streamed `gather_qmm` against the
+  full-table path with mixed 4/8-bit projections (skipped when the interpreter
+  has no MLX; run it with the mlx-vlm tool env).
+
 ## [0.138.0] - 2026-10-18
 
 ### Changed

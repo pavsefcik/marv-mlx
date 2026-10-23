@@ -34,7 +34,8 @@ models in-pi and runs a headless `marv-mlx run`.
   pi extension + wrapper, wires `~/.zshrc`. Accepts `--model <id>` to also
   download weights.
 - `lib/` — `marv_mlx_repl.py` (chat REPL), `marv-mlx-helpers.zsh`, `sitecustomize.py`
-  (setproctitle for process renaming).
+  (setproctitle for process renaming), and `marv_mlx_moe/` (the bundled
+  streaming routed-expert engine for compatible MoE checkpoints).
 - `extensions/marv-mlx.ts` — pi extension (symlinked/copied into
   `~/.pi/agent/extensions/`).
 - `scripts/` — one-off migration scripts.
@@ -188,6 +189,17 @@ Several agents may run against this repo at once. Keep them from colliding:
   interleaved linear/full attention) use APC's checkpoint (`mode=exact`) path
   automatically; tune `APC_CHECKPOINT_INTERVAL_TOKENS` if turn suffixes still
   prefill long.
+- **Streaming MoE is opt-in by checkpoint, not by launch path.**
+  `_marv_mlx_moe_compatible` (`lib/marv-mlx-helpers.zsh`) decides from the cached
+  `config.json`: `qwen3_5_moe` + an MLX `quantization` block + `switch_mlp`
+  expert tensors + affine mode. `_marv_mlx_build_server_argv` then launches
+  `<mlx-vlm-env-python> -m marv_mlx_moe.server` with `PYTHONPATH=<repo>/lib`;
+  every other model still launches `mlx_vlm.server`. The engine reads experts
+  from the original shards with `os.pread` (no repack) and supports mixed
+  per-projection bit widths (OptiQ). Keep both launch sites
+  (`_marv_mlx_launch` and `_marv_mlx_headless_launch`) going through the helper.
+  The pi extension's stable copy must include `lib/marv_mlx_moe/` (it uses
+  `fs.cp` recursively).
 - **Hidden global side effects on launch:** `HF_TOKEN` is injected from
   `~/.cache/huggingface/token` and `HF_HUB_DISABLE_SHARED_BLOBS=1` is exported.
 - **raw.githubusercontent.com CDN lags `main`.** After pushing, the one-liner
