@@ -224,7 +224,8 @@ USAGE
 #
 #   tier<US>tier_name<US>title<US>ids<US>tags<US>description
 #
-# `tier` is the numeric tier used for matching (8/16/32) and `tier_name` is the
+# `tier` is the numeric tier used for matching (whatever the catalog lists —
+# 8/16/32/48 GB at the moment) and `tier_name` is the
 # header line exactly as written in the source (e.g. "8 GB RAM Tier Models") —
 # consumers display that verbatim instead of rebuilding it from the number.
 #
@@ -270,7 +271,27 @@ _marv_mlx_parse_catalog() {
       # A second line with spaces but no comma is the tagline (description);
       # otherwise it is a legacy tags token list.
       ids="$a"
-      if [[ -n "$b" && "$b" == *" "* && "$b" != *,* ]]; then
+      # The second line is a tagline (description) unless it looks like a
+      # legacy tags token list. Legacy tags are a short comma list of single
+      # tokens ('t3', 't3, vision'); a tagline is prose, so it either has
+      # spaces but no comma or has a comma chunk that itself contains spaces
+      # ('Fast, lightweight general-purpose chat'). Commas alone are NOT a tags
+      # marker — every current tagline carries them.
+      local tag_line=0
+      if [[ -n "$b" ]]; then
+        if [[ "$b" != *" "* ]]; then
+          tag_line=1
+        elif [[ "$b" == *,* ]]; then
+          tag_line=1
+          local -a chunks=( ${(s:,:)b} ) chunk
+          for chunk in "${chunks[@]}"; do
+            chunk="${chunk#"${chunk%%[![:space:]]*}"}"
+            chunk="${chunk%"${chunk##*[![:space:]]}"}"
+            [[ -n "$chunk" && "$chunk" == *" "* ]] && { tag_line=0; break; }
+          done
+        fi
+      fi
+      if [[ -n "$b" ]] && (( ! tag_line )); then
         desc="$b"
       else
         tags="$b"; desc="$c"
@@ -308,6 +329,47 @@ _marv_mlx_parse_catalog() {
     entry+=( "$line" )
   done < "$file"
   _marv_mlx_catalog_flush
+}
+
+# The RAM tier that fits a machine with $1 GB of RAM, read from the tier ladder
+# in catalog $2. The ladder belongs to the catalog (8 / 16 / 32 / 48 GB today),
+# so adding a tier needs no code change: pick the largest tier that fits, or the
+# smallest listed tier when the machine is below every tier. Prints nothing when
+# the catalog has no "GB RAM" headers.
+_marv_mlx_catalog_active_tier() {
+  local ram_gb="${1:-0}" file="$2" t
+  [[ -r "$file" ]] || return 0
+  local -a tiers=()
+  while IFS=$'\x1f' read -r t _; do
+    [[ "$t" == <-> ]] && tiers+=( "$t" )
+  done < <(_marv_mlx_parse_catalog "$file")
+  (( ${#tiers[@]} )) || return 0
+  local smallest=${tiers[1]} active
+  for t in "${tiers[@]}"; do
+    (( t < smallest )) && smallest=$t
+  done
+  active=$smallest
+  for t in "${tiers[@]}"; do
+    (( t <= ram_gb && t > active )) && active=$t
+  done
+  print -r -- "$active"
+}
+
+# Catalog rows (the _marv_mlx_parse_catalog format) for every tier a machine
+# with $1 GB of RAM can host — the active tier plus all lower ones, so a big Mac
+# still sees the smaller models. Tiers above the machine are dropped. A catalog
+# with no tier headers passes through untouched.
+_marv_mlx_catalog_rows_for_ram() {
+  local ram_gb="${1:-0}" file="$2" active tier tname title ids tags desc
+  local US=$'\x1f'
+  [[ -r "$file" ]] || return 0
+  active=$(_marv_mlx_catalog_active_tier "$ram_gb" "$file")
+  while IFS=$'\x1f' read -r tier tname title ids tags desc; do
+    if [[ -n "$active" && "$tier" == <-> ]]; then
+      (( tier <= active )) || continue
+    fi
+    print -r -- "$tier${US}$tname${US}$title${US}$ids${US}$tags${US}$desc"
+  done < <(_marv_mlx_parse_catalog "$file")
 }
 
 # Pad a string to a display width with trailing spaces (printf pads by

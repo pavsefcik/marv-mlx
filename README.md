@@ -139,10 +139,12 @@ ports `11500–11509` are a TUI-only feature.
 ## Use
 
 - Start model and run — Enter starts the highlighted model and drops straight
-  into chat. If another model is already running, marv-mlx asks **Yes** (swap:
-  stop it and run the selected one on `:11500`), **No**, or **Run in parallel**
-  (keep both, the new one on the next free port). Multiple models can run at
-  once; each shows a `●` in the menu, and `^s` stops the highlighted one.
+  into chat. Installed models are listed by their full HuggingFace id
+  (`org/repo`), so a row can be copied as-is into another app. If another model
+  is already running, marv-mlx asks **Yes** (swap: stop it and run the selected
+  one on `:11500`), **No**, or **Run in parallel** (keep both, the new one on
+  the next free port). Multiple models can run at once; each shows a `●` in the
+  menu, and `^s` stops the highlighted one.
 - Thinking is off by default; `tab` turns it on and the reasoning trace then
   shows in grey above the answer. Each family is handled natively (Qwen/Gemma
   via their templates, Ministral via its Instruct/Reasoning pair). `esc` stops
@@ -155,8 +157,8 @@ ports `11500–11509` are a TUI-only feature.
   returns. `s` or
   `/` searches across all chats, `o` opens the chat folder. Deleted chats are
   gone for good (no trash).
-- Download from the bundled curated list (filtered to your RAM tier) or paste
-  any HuggingFace id
+- Download from the bundled curated list (your RAM tier plus every lower tier)
+  or paste any HuggingFace id
 - Ministral models are shipped as Instruct+Reasoning pairs: downloading a
   Ministral entry fetches both halves, the menu shows a single
   `Ministral-3-xB-4bit` entry, and `tab` swaps between the Instruct and
@@ -180,8 +182,9 @@ using `mlx_vlm.server` unchanged. The default streaming budget is 6 GiB and is
 set in **Basic settings → MoE cache (GB)** (or `MARV_MLX_MOE_CACHE_GB` in
 `config.zsh`). A bigger budget means fewer SSD reads.
 
-The curated 32 GB entry `mlx-community/Ornith-1.5-35B-A3B-OptiQ-4bit`
-(“The agentic king”) is built for this path: Ornith is built on Qwen, and its
+The curated 48 GB entry `mlx-community/Ornith-1.5-35B-A3B-OptiQ-4bit`
+("Large MoE optimized for agentic coding, tool calling, and multi-step tasks")
+is built for this path: Ornith is built on Qwen, and its
 OptiQ mixed 4/8-bit checkpoint streams per projection (the engine reads each
 projection's own quantization parameters).
 
@@ -209,4 +212,4 @@ when one exists a
 **Update to latest version** entry that pulls and reinstalls in place (a
 pi-managed install instead guides you to `pi update`; a curl/managed copy is
 refreshed from GitHub automatically). Installed version lives
-in the repo-root `VERSION` file (semver, currently 0.139.0).
+in the repo-root `VERSION` file (semver, currently 0.140.0).

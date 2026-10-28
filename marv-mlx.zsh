@@ -736,45 +736,33 @@ export HF_HUB_DISABLE_SHARED_BLOBS=1
 
   _marv_mlx_download_menu() {
     local ram_gb=$(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1073741824 ))
-    local tier_active
-    # Tiers in curated-llms.md are 8 / 16 / 32 GB; show only the machine's own
-    # tier (no cross-tier models and no tier-header lines).
-    if (( ram_gb >= 32 )); then
-      tier_active=32
-    elif (( ram_gb >= 16 )); then
-      tier_active=16
-    else
-      tier_active=8
-    fi
 
     typeset -A installed
     local models m
     models=$(ls "$hub_dir" 2>/dev/null | grep '^models--' | sed 's/models--//' | sed 's/--/\//g')
     for m in ${(f)models}; do installed[$m]=1; done
 
-    # ---- Parse the curated list through the shared catalog parser (all tiers),
-    # then keep only this machine's tier. The parser turns each 2-line block
-    # (id + tagline) into a title (the id's basename) plus a description, and
-    # strips any leading '#' so entries commented out in the source still show.
-    typeset -A tier_header
-    local -a p_title=() p_sub=() p_tags=() p_desc=() p_tier=()
-    if [[ -r "$curated_file" ]]; then
-      while IFS=$'\x1f' read -r c_tier _c_tname c_title c_ids c_tags c_desc; do
-        [[ "$c_tier" == "$tier_active" ]] || continue
-        local -a dl=( ${(s: & :)c_ids} ) m
-        local allinst=1
-        for m in "${dl[@]}"; do
-          [[ -n "${installed[$m]}" ]] || { allinst=0; break; }
-        done
-        (( allinst )) && continue
-        p_title+=( "$c_title" ); p_sub+=( "$c_ids" ); p_tags+=( "$c_tags" )
-        p_desc+=( "$c_desc" ); p_tier+=( "$c_tier" )
-      done < <(_marv_mlx_parse_catalog "$curated_file")
-    fi
+    # ---- Catalog rows for every tier this Mac can host: its own tier plus all
+    # lower ones, so a bigger machine still sees the smaller models. The parser
+    # turns each 2-line block (id + tagline) into a title (the id's basename)
+    # plus a description, and strips any leading '#' so entries commented out in
+    # the source still show. Fully installed entries are skipped.
+    local -a p_title=() p_sub=() p_tags=() p_desc=()
+    local c_tier _c_tname c_title c_ids c_tags c_desc
+    while IFS=$'\x1f' read -r c_tier _c_tname c_title c_ids c_tags c_desc; do
+      local -a dl=( ${(s: & :)c_ids} ) m
+      local allinst=1
+      for m in "${dl[@]}"; do
+        [[ -n "${installed[$m]}" ]] || { allinst=0; break; }
+      done
+      (( allinst )) && continue
+      p_title+=( "$c_title" ); p_sub+=( "$c_ids" ); p_tags+=( "$c_tags" )
+      p_desc+=( "$c_desc" )
+    done < <(_marv_mlx_catalog_rows_for_ram "$ram_gb" "$curated_file")
 
     # Deduplicate by the model/sub line, keeping the first occurrence.
     typeset -A seen
-    local -a srcs=() tags=() descs=() tiers=() titles=()
+    local -a srcs=() tags=() descs=() titles=()
     local i s
     for (( i=1; i<=${#p_sub[@]}; i++ )); do
       s="${p_sub[$i]}"
@@ -782,7 +770,6 @@ export HF_HUB_DISABLE_SHARED_BLOBS=1
       seen[$s]=1
       titles+=( "${p_title[$i]}" )
       srcs+=( "$s" ); tags+=( "${p_tags[$i]}" ); descs+=( "${p_desc[$i]}" )
-      tiers+=( "${p_tier[$i]}" )
     done
 
     # ---- Build flat rows for the menu. Cursor/nav only lands on rows with
@@ -1324,7 +1311,7 @@ PY
     done
   }
   _marv_mlx_main_build() {
-    local pid port model models m friendly rport think_suffix display first_running_idx=-1 sibfull
+    local pid port model models m rport think_suffix display first_running_idx=-1 sibfull
     _MARV_MLX_MENU_LINES=()
     _MARV_MLX_MENU_KINDS=()
     _MARV_MLX_MENU_MODELS=()
@@ -1365,10 +1352,11 @@ PY
       fi
     else
       # Append one menu row for a collapsed Ministral Instruct+Reasoning pair.
-      # Shows the base name; only one half is active at a time (running variant
-      # wins, else the stored default, else Instruct). Never runs both.
+      # Shows the full HF id of the half that will run (running variant wins,
+      # else the stored default, else Instruct); only one half is active at a
+      # time. Never runs both.
       _marv_mlx_add_ministral_row() {
-        local ins="$1" rea="$2" pref="" rp disp base
+        local ins="$1" rea="$2" pref="" rp disp
         local active="$ins"
         if [[ -n "${running_for_model[$rea]}" ]]; then
           active="$rea"
@@ -1377,13 +1365,12 @@ PY
           pref="$(cat "$state_dir/ministral-default" 2>/dev/null)"
           [[ "$pref" == "$rea" ]] && active="$rea"
         fi
-        base=$(_marv_mlx_ministral_base "$active")
         if [[ -n "${running_for_model[$active]}" ]]; then
           rport="${running_for_model[$active]##*	}"
           think_suffix=""
           [[ "$MARV_MLX_QUICK_THINKING" == "on" ]] && think_suffix=" thinking"
           [[ "$MARV_MLX_QUICK_THINKING" == "off" ]] && think_suffix=" thinking off"
-          display="● $base$think_suffix"
+          display="● $active$think_suffix"
           _MARV_MLX_MENU_LINES+=( "$display" )
           _MARV_MLX_MENU_KINDS+=( "model" )
           _MARV_MLX_MENU_MODELS+=( "$active" )
@@ -1392,7 +1379,7 @@ PY
           _MARV_MLX_MENU_PAIRS+=( "$ins"$'\t'"$rea" )
           (( first_running_idx < 0 )) && first_running_idx=$(( ${#_MARV_MLX_MENU_LINES[@]} - 1 ))
         else
-          _MARV_MLX_MENU_LINES+=( "$base" )
+          _MARV_MLX_MENU_LINES+=( "$active" )
           _MARV_MLX_MENU_KINDS+=( "model" )
           _MARV_MLX_MENU_MODELS+=( "$active" )
           _MARV_MLX_MENU_PORTS+=( "" )
@@ -1416,13 +1403,14 @@ PY
           fi
         fi
         [[ -n "${handled[$m]}" ]] && continue
-        friendly=$(_marv_mlx_display_name "$m")
+        # The row shows the whole HF id (org/repo), not just the repo basename,
+        # so it is unambiguous and can be copied straight into another app.
         if [[ -n "${running_for_model[$m]}" ]]; then
           rport="${running_for_model[$m]##*	}"
           think_suffix=""
           [[ "$MARV_MLX_QUICK_THINKING" == "on" ]] && think_suffix=" thinking"
           [[ "$MARV_MLX_QUICK_THINKING" == "off" ]] && think_suffix=" thinking off"
-          display="● $friendly$think_suffix"
+          display="● $m$think_suffix"
           _MARV_MLX_MENU_LINES+=( "$display" )
           _MARV_MLX_MENU_KINDS+=( "model" )
           _MARV_MLX_MENU_MODELS+=( "$m" )
@@ -1431,7 +1419,7 @@ PY
           _MARV_MLX_MENU_PAIRS+=( "" )
           (( first_running_idx < 0 )) && first_running_idx=$(( ${#_MARV_MLX_MENU_LINES[@]} - 1 ))
         else
-          _MARV_MLX_MENU_LINES+=( "$friendly" )
+          _MARV_MLX_MENU_LINES+=( "$m" )
           _MARV_MLX_MENU_KINDS+=( "model" )
           _MARV_MLX_MENU_MODELS+=( "$m" )
           _MARV_MLX_MENU_PORTS+=( "" )

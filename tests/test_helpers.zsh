@@ -297,6 +297,59 @@ check 'acme/Old-4B' "$ids" "catalog: legacy id-only block"
 check 'acme/Old-4B' "$title" "catalog: legacy id-only name"
 check 't3' "$tags" "catalog: legacy id-only tags"
 
+# Taglines are prose and routinely carry commas: a comma is NOT a tags marker.
+# Only a single token or a comma list of single tokens is legacy tags.
+cat > "$hub/cat3.md" <<'CAT'
+8 GB RAM Tier Models
+
+acme/Prose-4B
+Fast, lightweight general-purpose chat and everyday tasks
+
+acme/Old-4B
+t3, vision
+CAT
+prose=$( _marv_mlx_parse_catalog "$hub/cat3.md" | sed -n 1p )
+IFS=$'\x1f' read -r t tname title ids tags desc <<< "$prose"
+check 'Fast, lightweight general-purpose chat and everyday tasks' "$desc" \
+  "catalog: comma tagline -> description"
+check '' "$tags" "catalog: comma tagline is not tags"
+legacy2=$( _marv_mlx_parse_catalog "$hub/cat3.md" | sed -n 2p )
+IFS=$'\x1f' read -r t tname title ids tags desc <<< "$legacy2"
+check 't3, vision' "$tags" "catalog: single-token comma list stays tags"
+check '' "$desc" "catalog: tags list has no description"
+
+# Active tier comes from the catalog ladder, never from a hardcoded 8/16/32.
+check 8  "$(_marv_mlx_catalog_active_tier 8 "$hub/cat.md")"  "active tier: 8 GB Mac -> 8"
+check 16 "$(_marv_mlx_catalog_active_tier 18 "$hub/cat.md")" "active tier: 18 GB Mac -> 16"
+check 16 "$(_marv_mlx_catalog_active_tier 64 "$hub/cat.md")" "active tier: above the ladder -> top tier"
+check 8  "$(_marv_mlx_catalog_active_tier 4 "$hub/cat.md")"  "active tier: below the ladder -> smallest"
+cat > "$hub/cat4.md" <<'CAT'
+32 GB RAM Tier Models
+
+acme/Top-32B
+Top of 32
+
+48 GB RAM Tier Models
+
+acme/Top-48B
+Top of 48
+CAT
+check 48 "$(_marv_mlx_catalog_active_tier 64 "$hub/cat4.md")" "active tier: new 48 GB tier picked up"
+check 32 "$(_marv_mlx_catalog_active_tier 36 "$hub/cat4.md")" "active tier: 36 GB Mac stays on 32"
+check '' "$(_marv_mlx_catalog_active_tier 64 "$hub/empty.md")" "active tier: tierless catalog -> empty"
+
+# Visible rows: a bigger Mac sees its own tier AND every lower tier; tiers above
+# it stay hidden.
+check $'acme/Top-32B\nacme/Top-48B' \
+  "$(_marv_mlx_catalog_rows_for_ram 64 "$hub/cat4.md" | awk -F$'\x1f' '{print $4}')" \
+  "rows for ram: big Mac sees lower + own tier"
+check 'acme/Top-32B' \
+  "$(_marv_mlx_catalog_rows_for_ram 36 "$hub/cat4.md" | awk -F$'\x1f' '{print $4}')" \
+  "rows for ram: 36 GB Mac excludes the 48 GB tier"
+check $'acme/Tiny-4B\nacme/Pair-A & acme/Pair-B' \
+  "$(_marv_mlx_catalog_rows_for_ram 8 "$hub/cat.md" | awk -F$'\x1f' '{print $4}')" \
+  "rows for ram: lowest tier shows only its own tier"
+
 # Empty catalog is not an error.
 : > "$hub/empty.md"
 check '' "$(_marv_mlx_parse_catalog "$hub/empty.md")" "catalog: empty file -> no rows"

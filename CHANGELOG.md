@@ -6,6 +6,35 @@ sync across `VERSION`, `package.json`, and the README.
 
 ## [Unreleased]
 
+## [0.140.0] - 2026-10-28
+
+### Changed
+
+- **Curated catalog refreshed.** New picks across the tiers: Qwen3.5 4B/9B,
+  Ornith 1.5 9B/35B OptiQ, Qwen3.6-35B-A3B, Qwen3.8-27B and
+  ThinkingCap-Qwen3.8-27B-DWQ, plus a new 48 GB RAM tier for the 35B/27B
+  entries. Taglines are now descriptive prose.
+- **Download menu tiers follow the catalog.** The menu shows every tier a Mac
+  can host — its own tier plus all lower ones — so a 48 GB machine also sees the
+  8/16/32 GB picks, while tiers above the machine stay hidden. The ladder comes
+  from `curated-llms.md` via the new `_marv_mlx_catalog_active_tier` and
+  `_marv_mlx_catalog_rows_for_ram` helpers, instead of a hardcoded 8/16/32 map,
+  so new tiers (the refreshed catalog's 48 GB one) need no code change. Verified
+  by `tests/test_helpers.zsh` (48 GB and tierless fixtures, lower-tier
+  visibility).
+- **Main menu lists full HuggingFace ids.** Installed models are shown as
+  `org/repo` instead of the bare repo name, so a highlighted row can be copied
+  straight into another app; a running model keeps the `●` marker and thinking
+  suffix. Collapsed Ministral pairs show the full id of the half that will run.
+
+### Fixed
+
+- **Comma-bearing taglines render as descriptions, not legacy tags.** The
+  catalog parser no longer treats any comma in an entry's second line as a
+  legacy tags marker; only a single token or a comma list of single tokens
+  (`t3, vision`) is tags, so prose taglines like "Fast, lightweight
+  general-purpose chat and everyday tasks" reach the menu's description line.
+
 ## [0.139.0] - 2026-10-23
 
 ### Added

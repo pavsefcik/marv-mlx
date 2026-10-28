@@ -1,37 +1,40 @@
 8 GB RAM Tier Models
 
 mlx-community/Qwen3.5-4B-MLX-4bit
-The compact generalist
+Fast, lightweight general-purpose chat and everyday tasks
 
-mlx-community/gemma-4-e4b-it-4bit
-The quick wit
+TheCluster/Qwen3.5-4B-Heretic-MLX-mxfp4
+Decensored 4B variant for fewer refusals – experimental, with possible quality/behavior trade-offs
 
 
 16 GB RAM Tier Models
 
+mlx-community/Qwen3.5-9B-MLX-4bit
+Strong general-purpose model – chat, writing, reasoning, and light coding
+
 ornith-ai/Ornith-1.5-9B-MLX-4bit
-The agentic sniper
+Lightweight agentic coding and tool-calling model
 
-mlx-community/gemma-4-12B-it-qat-OptiQ-4bit
-The creative writer
-
-TheCluster/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-MLX-mxfp4
-The uncensored savage
-
-prism-ml/Ternary-Bonsai-2-27B-mlx-2bit
-The efficiency experiment
+TheCluster/Qwen3.5-9B-Heretic-MLX-mxfp4
+Decensored 9B variant for fewer refusals – general-purpose use with experimental behavior
 
 
 32 GB RAM Tier Models
 
+mlx-community/Qwen3.8-27B-4bit
+Flagship dense all-rounder – strong coding, reasoning, multimodal input, tool calling, and agentic tasks
+
+mlx-community/Qwen3.6-35B-A3B-4bit
+Large MoE model – efficient generation for general chat and coding
+
+ornith-ai/Ornith-1.5-35B-A3B-MLX-4bit
+Large MoE optimized for agentic coding, tool calling, and multi-step tasks
+
+TheCluster/Qwen3.8-27B-Heretic-MLX-mxfp4
+Decensored 27B variant of Qwen3.8 for fewer refusals – retains the base model’s coding, multimodal, and agentic capabilities
+
+
+48 GB RAM Tier Models
+
 bottlecapai/ThinkingCap-Qwen3.8-27B-MLX-4bit-DWQ
-The deep thinker
-
-mlx-community/Ornith-1.5-35B-A3B-OptiQ-4bit
-The agentic king
-
-mlx-community/gemma-4-31B-it-qat-OptiQ-4bit
-The creative flagship
-
-TheCluster/Qwen3.5-27B-Uncensored-HauhauCS-Aggressive-MLX-mxfp4
-The F-bomb monster
+High-quality 27B variant for demanding coding, tool use, and agentic workflows
