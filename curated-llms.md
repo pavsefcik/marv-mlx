@@ -18,6 +18,15 @@ Lightweight agentic coding and tool-calling model
 TheCluster/Qwen3.5-9B-Heretic-MLX-mxfp4
 Decensored 9B variant for fewer refusals – general-purpose use with experimental behavior
 
+keXjos/Qwen3.8-9B-Distill-mlx-5Bit
+Frontier reasoning distilled into a 9B — excels at hard math and code, with native tool calling and 262K context.
+
+keXjos/Ornith-1.5-9B-uncensored-mlx-5Bit
+Uncensored agentic 9B at higher precision than the 4-bit builds
+
+prism-ml/Ternary-Bonsai-2-27B-mlx-2bit
+27B breadth in about 7 GB of 2-bit weights - more errors on precise or numeric work
+
 
 32 GB RAM Tier Models
 
@@ -38,3 +47,6 @@ Decensored 27B variant of Qwen3.8 for fewer refusals – retains the base model�
 
 bottlecapai/ThinkingCap-Qwen3.8-27B-MLX-4bit-DWQ
 High-quality 27B variant for demanding coding, tool use, and agentic workflows
+
+mlx-community/gemma-4-31B-it-qat-OptiQ-4bit
+Largest dense non-Qwen option - stronger long-form writing and instruction nuance
