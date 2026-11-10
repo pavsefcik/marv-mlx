@@ -1435,22 +1435,22 @@ PY
       done
     fi
 
-    # ---- Download group: the curated picks for this Mac's own RAM tier that
-    # aren't installed yet, so "new model" means one row per candidate. The full
-    # screen (every lower tier, custom id, folder) stays one row away. Ids are
-    # shown verbatim; the catalog carries no taglines.
+    # ---- Download group: curated picks that aren't installed yet, for this
+    # Mac's own RAM tier AND every lower one (a big Mac can still run the small
+    # picks). Same tier ladder as the Download screen — `_marv_mlx_catalog_rows_
+    # for_ram` — so a single-entry tier never leaves the section looking empty.
+    # Ids are shown verbatim; the catalog carries no taglines.
     _row "──────────────────────" "separator"
     _row "Download new model:" "header"
-    local _ctier _ctname _ctitle _cids _ctags _cdesc active_tier
-    active_tier=$(_marv_mlx_catalog_active_tier "$ram_gb" "$curated_file")
+    local _ctier _ctname _ctitle _cids _ctags _cdesc n_downloads=0
     while IFS=$'\x1f' read -r _ctier _ctname _ctitle _cids _ctags _cdesc; do
-      [[ -n "$active_tier" && "$_ctier" == "$active_tier" ]] || continue
       for m in ${(s: & :)_cids}; do
         [[ -n "${installed[$m]}" ]] && continue
         _row "$m" "download" "$m"
+        (( n_downloads++ ))
       done
-    done < <(_marv_mlx_parse_catalog "$curated_file")
-    if [[ -z "$active_tier" ]]; then
+    done < <(_marv_mlx_catalog_rows_for_ram "$ram_gb" "$curated_file")
+    if (( n_downloads == 0 )) && ! _marv_mlx_catalog_valid "$curated_file"; then
       _row "No curated list available — paste an id below." "note"
     fi
     _row "  ────────────────────" "separator"
