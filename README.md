@@ -187,10 +187,11 @@ using `mlx_vlm.server` unchanged. The default streaming budget is 6 GiB and is
 set in **Basic settings → MoE cache (GB)** (or `MARV_MLX_MOE_CACHE_GB` in
 `config.zsh`). A bigger budget means fewer SSD reads.
 
-The curated 48 GB entry `mlx-community/Ornith-1.5-35B-A3B-OptiQ-4bit`
-is built for this path: Ornith is built on Qwen, and its
-OptiQ mixed 4/8-bit checkpoint streams per projection (the engine reads each
-projection's own quantization parameters).
+A3B entries in the curated list (e.g. `mlx-community/Qwen3.6-35B-A3B-4bit` on
+the 32 GB tier) are the kind of checkpoint this path is for: only the routed
+experts stream from SSD, so a ~35B MoE runs in the memory of a much smaller dense
+model. Mixed-precision builds (OptiQ and friends) work too — the engine reads
+each projection's own quantization parameters.
 
 ## Configuration
 
