@@ -1454,9 +1454,13 @@ PY
       _row "No curated list available — paste an id below." "note"
     fi
     _row "  ────────────────────" "separator"
-    _row "Custom (paste HuggingFace ID)…" "action" "" "" "download_custom"
+    _row "Custom (paste HuggingFace ID)" "action" "" "" "download_custom"
     _row "Open models folder" "action" "" "" "download_open"
-    _row "All curated models…" "action" "" "" "download_all"
+    # "All curated models…" (action 'download_all' → _marv_mlx_download_menu) is
+    # deliberately not listed any more: the inline picks above are the download
+    # entry point. The action case and the full screen are still in the code, so
+    # re-adding the row below is all it takes to bring it back.
+    # _row "All curated models…" "action" "" "" "download_all"
 
     # ---- Settings group
     _row "──────────────────────" "separator"
@@ -1874,6 +1878,7 @@ PY
     else
       case "$action" in
         update) _marv_mlx_do_update ;;
+        # Reachable only if the "All curated models…" row is re-added above.
         download_all) _marv_mlx_download_menu ;;
         download_custom)
           local custom
