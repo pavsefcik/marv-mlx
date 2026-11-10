@@ -746,6 +746,48 @@ export HF_HUB_DISABLE_SHARED_BLOBS=1
     return $rc
   }
 
+  # Download one catalog/custom entry (space- or '&'-separated ids download
+  # together, e.g. a Ministral pair), then offer to start the first one. Shared
+  # by the Download screen and the main menu's inline curated rows.
+  _marv_mlx_download_flow() {
+    local sub="$1" title="$2" model="" ok=1
+    local -a dl=( ${(s: & :)sub} )
+    if ! _marv_mlx_hf_has_token && (( _MARV_MLX_HF_SKIPPED == 0 )); then
+      if ! _marv_mlx_hf_setup; then
+        _MARV_MLX_HF_SKIPPED=1
+      fi
+    fi
+    echo
+    gum style --foreground 212 --bold "Downloading $title"
+    echo "(progress will stream below — Ctrl-C to abort)"
+    echo
+    for model in "${dl[@]}"; do
+      echo "  ▶ $model"
+      # Id-only check (no hub dir): a half-cached snapshot must still be
+      # re-downloadable, while a GGUF id is nonsensical to fetch here.
+      if _marv_mlx_model_unsupported_reason "$model" >/dev/null; then
+        echo "    GGUF is not loadable by mlx-vlm — pick an MLX-quantized repo."
+        ok=0
+        continue
+      fi
+      if ! _marv_mlx_snapshot_download "$model"; then
+        ok=0
+      fi
+    done
+    if (( ok )); then
+      echo
+      gum style --foreground 42 "✓ Downloaded: $title"
+      echo
+      if gum confirm "Start ${dl[1]} now?"; then
+        _marv_mlx_launch "${dl[1]}"
+      fi
+    else
+      echo
+      gum style --foreground 196 "✗ Download failed or cancelled."
+    fi
+    _marv_mlx_pause
+  }
+
   _marv_mlx_download_menu() {
     local ram_gb=$(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1073741824 ))
 
@@ -905,45 +947,7 @@ export HF_HUB_DISABLE_SHARED_BLOBS=1
       done
       _D_scroll_cursor
     }
-    _D_do_download() {
-      local sub="$1" title="$2" model="" ok=1
-      # A Ministral block carries two ids ('instruct & reasoning'); download both.
-      local -a dl=( ${(s: & :)sub} )
-      if ! _marv_mlx_hf_has_token && (( _MARV_MLX_HF_SKIPPED == 0 )); then
-        if ! _marv_mlx_hf_setup; then
-          _MARV_MLX_HF_SKIPPED=1
-        fi
-      fi
-      echo
-      gum style --foreground 212 --bold "Downloading $title"
-      echo "(progress will stream below — Ctrl-C to abort)"
-      echo
-      for model in "${dl[@]}"; do
-        echo "  ▶ $model"
-        # Id-only check (no hub dir): a half-cached snapshot must still be
-        # re-downloadable, while a GGUF id is nonsensical to fetch here.
-        if _marv_mlx_model_unsupported_reason "$model" >/dev/null; then
-          echo "    GGUF is not loadable by mlx-vlm — pick an MLX-quantized repo."
-          ok=0
-          continue
-        fi
-        if ! _marv_mlx_snapshot_download "$model"; then
-          ok=0
-        fi
-      done
-      if (( ok )); then
-        echo
-        gum style --foreground 42 "✓ Downloaded: $title"
-        echo
-        if gum confirm "Start ${dl[1]} now?"; then
-          _marv_mlx_launch "${dl[1]}"
-        fi
-      else
-        echo
-        gum style --foreground 196 "✗ Download failed or cancelled."
-      fi
-      _marv_mlx_pause
-    }
+    _D_do_download() { _marv_mlx_download_flow "$1" "$2" }
     _D_activate() {
       local r=$(( cursor + 1 ))
       (( RCUR[$r] )) || return
@@ -1324,6 +1328,7 @@ PY
   }
   _marv_mlx_main_build() {
     local pid port model models m rport think_suffix display first_running_idx=-1 sibfull
+    local ram_gb=$(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1073741824 ))
     _MARV_MLX_MENU_LINES=()
     _MARV_MLX_MENU_KINDS=()
     _MARV_MLX_MENU_MODELS=()
@@ -1335,6 +1340,22 @@ PY
       [[ -z "$pid" ]] && continue
       running_for_model[$model]="$pid"$'\t'"$port"
     done < <(_marv_mlx_running)
+
+    # Append one row (keeps the six parallel arrays in step). Kinds:
+    #   model    - an installed model, enter runs/chats
+    #   download - a curated suggestion, enter downloads it
+    #   action   - a menu action (ACTIONS holds its name)
+    #   header   - a section label; not navigable
+    #   note     - dim informational text; not navigable
+    #   separator- a rule; not navigable
+    _row() {
+      _MARV_MLX_MENU_LINES+=( "$1" )
+      _MARV_MLX_MENU_KINDS+=( "$2" )
+      _MARV_MLX_MENU_MODELS+=( "${3:-}" )
+      _MARV_MLX_MENU_PORTS+=( "${4:-}" )
+      _MARV_MLX_MENU_ACTIONS+=( "${5:-}" )
+      _MARV_MLX_MENU_PAIRS+=( "${6:-}" )
+    }
 
     _MARV_MLX_MENU_NO_MODELS=0
     models=$(ls "$hub_dir" 2>/dev/null | grep '^models--' | sed 's/models--//' | sed 's/--/\//g')
@@ -1348,20 +1369,14 @@ PY
       done
       models="${(F)supported}"
     fi
+
+    typeset -A installed
+    local mm
+    for mm in ${(f)models}; do [[ -n "$mm" ]] && installed[$mm]=1; done
+
     if [[ -z "$models" ]]; then
       _MARV_MLX_MENU_NO_MODELS=1
-      _MARV_MLX_MENU_LINES=( "Download your first model" "──────────────────────" "Chat history" "──────────────────────" "Basic settings" "Advanced settings" "──────────────────────" "Stop & quit" )
-      _MARV_MLX_MENU_KINDS=( "action" "separator" "action" "separator" "action" "action" "separator" "action" )
-      _MARV_MLX_MENU_MODELS=( "" "" "" "" "" "" "" "" )
-      _MARV_MLX_MENU_PORTS=( "" "" "" "" "" "" "" "" )
-      _MARV_MLX_MENU_ACTIONS=( "download" "" "history" "" "basic" "advanced" "" "quit" )
-      if [[ -n "$_MARV_MLX_UPDATE_NEW" ]]; then
-        _MARV_MLX_MENU_LINES=( "Update to latest version" "${_MARV_MLX_MENU_LINES[@]}" )
-        _MARV_MLX_MENU_KINDS=( "action" "${_MARV_MLX_MENU_KINDS[@]}" )
-        _MARV_MLX_MENU_ACTIONS=( "update" "${_MARV_MLX_MENU_ACTIONS[@]}" )
-        _MARV_MLX_MENU_MODELS=( "" "${_MARV_MLX_MENU_MODELS[@]}" )
-        _MARV_MLX_MENU_PORTS=( "" "${_MARV_MLX_MENU_PORTS[@]}" )
-      fi
+      _row "No models installed yet — pick one below." "note"
     else
       # Append one menu row for a collapsed Ministral Instruct+Reasoning pair.
       # Shows the full HF id of the half that will run (running variant wins,
@@ -1383,26 +1398,15 @@ PY
           [[ "$MARV_MLX_QUICK_THINKING" == "on" ]] && think_suffix=" thinking"
           [[ "$MARV_MLX_QUICK_THINKING" == "off" ]] && think_suffix=" thinking off"
           display="● $active$think_suffix"
-          _MARV_MLX_MENU_LINES+=( "$display" )
-          _MARV_MLX_MENU_KINDS+=( "model" )
-          _MARV_MLX_MENU_MODELS+=( "$active" )
-          _MARV_MLX_MENU_PORTS+=( "$rport" )
-          _MARV_MLX_MENU_ACTIONS+=( "" )
-          _MARV_MLX_MENU_PAIRS+=( "$ins"$'\t'"$rea" )
+          _row "$display" "model" "$active" "$rport" "" "$ins"$'\t'"$rea"
           (( first_running_idx < 0 )) && first_running_idx=$(( ${#_MARV_MLX_MENU_LINES[@]} - 1 ))
         else
-          _MARV_MLX_MENU_LINES+=( "$active" )
-          _MARV_MLX_MENU_KINDS+=( "model" )
-          _MARV_MLX_MENU_MODELS+=( "$active" )
-          _MARV_MLX_MENU_PORTS+=( "" )
-          _MARV_MLX_MENU_ACTIONS+=( "" )
-          _MARV_MLX_MENU_PAIRS+=( "$ins"$'\t'"$rea" )
+          _row "$active" "model" "$active" "" "" "$ins"$'\t'"$rea"
         fi
       }
 
       local -a downloaded=( ${(f)models} )
       typeset -A dlset handled
-      local mm
       for mm in "${downloaded[@]}"; do dlset[$mm]=1; done
       for m in "${downloaded[@]}"; do
         # Collapse a Ministral pair into a single row (handled via Instruct).
@@ -1423,58 +1427,64 @@ PY
           [[ "$MARV_MLX_QUICK_THINKING" == "on" ]] && think_suffix=" thinking"
           [[ "$MARV_MLX_QUICK_THINKING" == "off" ]] && think_suffix=" thinking off"
           display="● $m$think_suffix"
-          _MARV_MLX_MENU_LINES+=( "$display" )
-          _MARV_MLX_MENU_KINDS+=( "model" )
-          _MARV_MLX_MENU_MODELS+=( "$m" )
-          _MARV_MLX_MENU_PORTS+=( "$rport" )
-          _MARV_MLX_MENU_ACTIONS+=( "" )
-          _MARV_MLX_MENU_PAIRS+=( "" )
+          _row "$display" "model" "$m" "$rport"
           (( first_running_idx < 0 )) && first_running_idx=$(( ${#_MARV_MLX_MENU_LINES[@]} - 1 ))
         else
-          _MARV_MLX_MENU_LINES+=( "$m" )
-          _MARV_MLX_MENU_KINDS+=( "model" )
-          _MARV_MLX_MENU_MODELS+=( "$m" )
-          _MARV_MLX_MENU_PORTS+=( "" )
-          _MARV_MLX_MENU_ACTIONS+=( "" )
-          _MARV_MLX_MENU_PAIRS+=( "" )
+          _row "$m" "model" "$m"
         fi
       done
-      _MARV_MLX_MENU_LINES+=( "──────────────────────" )
-      _MARV_MLX_MENU_KINDS+=( "separator" )
-      _MARV_MLX_MENU_MODELS+=( "" ); _MARV_MLX_MENU_PORTS+=( "" ); _MARV_MLX_MENU_ACTIONS+=( "" )
-      if [[ -n "$_MARV_MLX_UPDATE_NEW" ]]; then
-        _MARV_MLX_MENU_LINES+=( "Update to latest version" )
-        _MARV_MLX_MENU_KINDS+=( "action" )
-        _MARV_MLX_MENU_MODELS+=( "" ); _MARV_MLX_MENU_PORTS+=( "" ); _MARV_MLX_MENU_ACTIONS+=( "update" )
-      fi
-      # Chat history group
-      _MARV_MLX_MENU_LINES+=( "Chat history" )
-      _MARV_MLX_MENU_KINDS+=( "action" )
-      _MARV_MLX_MENU_MODELS+=( "" ); _MARV_MLX_MENU_PORTS+=( "" ); _MARV_MLX_MENU_ACTIONS+=( "history" )
-
-      # Settings group
-      _MARV_MLX_MENU_LINES+=( "──────────────────────" )
-      _MARV_MLX_MENU_KINDS+=( "separator" )
-      _MARV_MLX_MENU_MODELS+=( "" ); _MARV_MLX_MENU_PORTS+=( "" ); _MARV_MLX_MENU_ACTIONS+=( "" )
-      _MARV_MLX_MENU_LINES+=( "Basic settings" "Advanced settings" "Download new model" )
-      _MARV_MLX_MENU_KINDS+=( "action" "action" "action" )
-      _MARV_MLX_MENU_MODELS+=( "" "" "" ); _MARV_MLX_MENU_PORTS+=( "" "" "" )
-      _MARV_MLX_MENU_ACTIONS+=( "basic" "advanced" "download" )
-
-      # Lifecycle group
-      _MARV_MLX_MENU_LINES+=( "──────────────────────" )
-      _MARV_MLX_MENU_KINDS+=( "separator" )
-      _MARV_MLX_MENU_MODELS+=( "" ); _MARV_MLX_MENU_PORTS+=( "" ); _MARV_MLX_MENU_ACTIONS+=( "" )
-      _MARV_MLX_MENU_LINES+=( "Restart & refresh" "Stop & quit" )
-      _MARV_MLX_MENU_KINDS+=( "action" "action" )
-      _MARV_MLX_MENU_MODELS+=( "" "" ); _MARV_MLX_MENU_PORTS+=( "" "" )
-      _MARV_MLX_MENU_ACTIONS+=( "restart" "quit" )
     fi
+
+    # ---- Download group: the curated picks for this Mac's own RAM tier that
+    # aren't installed yet, so "new model" means one row per candidate. The full
+    # screen (every lower tier, custom id, folder) stays one row away. Ids are
+    # shown verbatim; the catalog carries no taglines.
+    _row "──────────────────────" "separator"
+    _row "Download new model:" "header"
+    local _ctier _ctname _ctitle _cids _ctags _cdesc active_tier
+    active_tier=$(_marv_mlx_catalog_active_tier "$ram_gb" "$curated_file")
+    while IFS=$'\x1f' read -r _ctier _ctname _ctitle _cids _ctags _cdesc; do
+      [[ -n "$active_tier" && "$_ctier" == "$active_tier" ]] || continue
+      for m in ${(s: & :)_cids}; do
+        [[ -n "${installed[$m]}" ]] && continue
+        _row "$m" "download" "$m"
+      done
+    done < <(_marv_mlx_parse_catalog "$curated_file")
+    if [[ -z "$active_tier" ]]; then
+      _row "No curated list available — paste an id below." "note"
+    fi
+    _row "  ────────────────────" "separator"
+    _row "Custom (paste HuggingFace ID)…" "action" "" "" "download_custom"
+    _row "Open models folder" "action" "" "" "download_open"
+    _row "All curated models…" "action" "" "" "download_all"
+
+    # ---- Settings group
+    _row "──────────────────────" "separator"
+    _row "Basic settings" "action" "" "" "basic"
+    _row "Advanced settings" "action" "" "" "advanced"
+    _row "Chat history" "action" "" "" "history"
+    _row "Restart & refresh" "action" "" "" "restart"
+    if [[ -n "$_MARV_MLX_UPDATE_NEW" ]]; then
+      _row "Update to latest version" "action" "" "" "update"
+    fi
+
+    # ---- Lifecycle group
+    _row "──────────────────────" "separator"
+    _row "Stop & quit" "action" "" "" "quit"
+
     _MARV_MLX_MENU_SCROLL=0
     if (( first_running_idx >= 0 )); then
       _MARV_MLX_MENU_CURSOR=$first_running_idx
     else
+      # Otherwise start on the first row the cursor can land on.
       _MARV_MLX_MENU_CURSOR=0
+      local i
+      for (( i=1; i<=${#_MARV_MLX_MENU_KINDS[@]}; i++ )); do
+        case "${_MARV_MLX_MENU_KINDS[$i]}" in
+          separator|header|note) continue ;;
+          *) _MARV_MLX_MENU_CURSOR=$(( i - 1 )); break ;;
+        esac
+      done
     fi
     _marv_mlx_main_scroll_cursor
   }
@@ -1490,9 +1500,7 @@ PY
       print -n -- "\033[${_MARV_MLX_MENU_NLINES}A\033[J"
     fi
     local -a out=()
-    if (( _MARV_MLX_MENU_NO_MODELS )); then
-      out+=( $'\e[1;35mNo models installed yet.\e[0m' )
-    else
+    if (( ! _MARV_MLX_MENU_NO_MODELS )); then
       out+=( $'\e[1;35mSelect model and run:\e[0m' )
     fi
     n=${#_MARV_MLX_MENU_LINES[@]}
@@ -1506,8 +1514,11 @@ PY
       if (( idx == _MARV_MLX_MENU_CURSOR )); then
         prefix="> "
       fi
-      if [[ "$kind" == "separator" ]]; then
+      if [[ "$kind" == (separator|note) ]]; then
         out+=( $'\e[2m'"$line"$'\e[0m' )
+      elif [[ "$kind" == "header" ]]; then
+        # Section label, styled like the "Select model and run:" heading above.
+        out+=( $'\e[1;35m'"$line"$'\e[0m' )
       elif (( idx == _MARV_MLX_MENU_CURSOR )); then
         out+=( $'\e[1;36m'"$prefix$line"$'\e[0m' )
       else
@@ -1519,9 +1530,9 @@ PY
     done
     local footer_text
     if (( has_running )); then
-      footer_text="↓↑ navigate • enter submit/start • tab toggle thinking • ^s stop server • ^d delete • ^q quit"
+      footer_text="↓↑ navigate • enter run/download • tab toggle thinking • ^s stop server • ^d delete • ^q quit"
     else
-      footer_text="↓↑ navigate • enter submit/start • ^d delete • ^q quit"
+      footer_text="↓↑ navigate • enter run/download • ^d delete • ^q quit"
     fi
     footer_text="${footer_text:0:$(( _MARV_MLX_MENU_WIDTH - 1 ))}"
     out+=( $'\e[2m'"$footer_text"$'\e[0m' )
@@ -1577,10 +1588,10 @@ PY
       new=$(( new + delta ))
       if (( new < 0 )); then new=$(( n - 1 )); fi
       if (( new >= n )); then new=0; fi
-      if [[ "${_MARV_MLX_MENU_KINDS[$((new+1))]}" != "separator" ]]; then
-        _MARV_MLX_MENU_CURSOR=$new
-        break
-      fi
+      case "${_MARV_MLX_MENU_KINDS[$((new+1))]}" in
+        separator|header|note) ;;
+        *) _MARV_MLX_MENU_CURSOR=$new; break ;;
+      esac
       if (( new == guard )); then break; fi
     done
     _marv_mlx_main_scroll_cursor
@@ -1821,9 +1832,13 @@ PY
     local model="${_MARV_MLX_MENU_MODELS[$idx]}"
     local port="${_MARV_MLX_MENU_PORTS[$idx]}"
     local action="${_MARV_MLX_MENU_ACTIONS[$idx]}"
-    [[ "$kind" == "separator" ]] && return
+    [[ "$kind" == (separator|header|note) ]] && return
     _marv_mlx_main_clear
-    if [[ "$kind" == "model" ]]; then
+    if [[ "$kind" == "download" ]]; then
+      # Curated suggestion: download it, then rebuild (the flow offers to start
+      # the model, and a fresh install re-sorts the menu).
+      _marv_mlx_download_flow "$model" "$model"
+    elif [[ "$kind" == "model" ]]; then
       if [[ -n "$port" ]]; then
         # Already running — just chat with it.
         _marv_mlx_chat_repl "$model" "$port"
@@ -1859,7 +1874,13 @@ PY
     else
       case "$action" in
         update) _marv_mlx_do_update ;;
-        download) _marv_mlx_download_menu ;;
+        download_all) _marv_mlx_download_menu ;;
+        download_custom)
+          local custom
+          custom=$(gum input --placeholder "e.g. mlx-community/Ministral-3-3B-Instruct-2512-4bit" --prompt "Model: ")
+          [[ -n "$custom" ]] && _marv_mlx_download_flow "$custom" "$custom"
+          ;;
+        download_open) open "$hub_dir" ;;
         history) _marv_mlx_chat_history_menu ;;
         basic) _marv_mlx_basic_settings_menu ;;
         advanced) _marv_mlx_advanced_settings_menu ;;
