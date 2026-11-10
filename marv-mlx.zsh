@@ -85,15 +85,27 @@ marv-mlx() {
 
   mkdir -p "$state_dir" "$log_dir" "$chat_dir"
 
-  # The curated download list is bundled in this repo (`curated-llms.md`) — the
-  # hand-picked catalog that used to live in the separate marv-curator repo. A
-  # `MARV_MLX_CATALOG` override points elsewhere (tests, custom lists). The
-  # legacy cache path is kept in sync for sibling tools (the marv harness reads
-  # `~/.cache/marv/mlx/curated-llms.md`) whenever the bundled list changes.
-  local curated_file="${MARV_MLX_CATALOG:-$_MARV_MLX_SRC_DIR/curated-llms.md}"
-  local curated_cache="$state_dir/curated-llms.md"
-  if [[ -r "$curated_file" ]] && ! cmp -s "$curated_file" "$curated_cache"; then
-    cp -f "$curated_file" "$curated_cache" 2>/dev/null || true
+  # The curated download list ships bundled in this repo (`curated-llms.md`), but
+  # upstream can add models between releases, so an interactive startup refreshes
+  # a cached copy from GitHub (`_marv_mlx_catalog_sync`: TTL-gated, ~5s timeout,
+  # offline keeps what we have). The cache sits at the legacy path sibling tools
+  # read (`~/.cache/marv/mlx/curated-llms.md`) and is what the Download menu and
+  # `marv-mlx curated` serve. A `MARV_MLX_CATALOG` override points at a different
+  # list and disables the refresh; MARV_MLX_CATALOG_TTL (seconds, 0 = every run,
+  # `never` = off) and MARV_MLX_CATALOG_URL tune it.
+  local curated_file="${MARV_MLX_CATALOG:-}"
+  if [[ -z "$curated_file" ]]; then
+    # Never fetch on a headless verb: `marv-mlx run` sits on pi's model_select
+    # path and must stay fast. Seeding from the bundled copy still happens, so
+    # headless verbs read the same (last fetched) list as the TUI.
+    local catalog_url=""
+    (( $# == 0 )) && catalog_url="${MARV_MLX_CATALOG_URL:-$_MARV_MLX_CATALOG_URL_DEFAULT}"
+    if _marv_mlx_catalog_sync "$_MARV_MLX_SRC_DIR/curated-llms.md" \
+         "$state_dir/curated-llms.md" "$catalog_url" "${MARV_MLX_CATALOG_TTL:-3600}"; then
+      curated_file="$state_dir/curated-llms.md"
+    else
+      curated_file="$_MARV_MLX_SRC_DIR/curated-llms.md"
+    fi
   fi
 
   _marv_mlx_write_default_config() {

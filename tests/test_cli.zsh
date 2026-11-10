@@ -143,6 +143,23 @@ d=json.load(sys.stdin);
 print("ok" if any(e["tier"]==8 and e["models"]==["acme/Tiny-4B"] and e["description"]=="The compact generalist" for e in d) else "bad")' 2>/dev/null)" \
   "curated --json tagline -> description"
 
+# --- bundled catalog fallback (no MARV_MLX_CATALOG override) -------------------
+# The catalog cache is seeded from the bundled file even on a headless verb, and
+# headless verbs NEVER fetch (curl here always fails): the shipped list must show
+# up unchanged instead of an empty menu.
+unset MARV_MLX_CATALOG
+out=$(marv-mlx curated 2>/dev/null)
+[[ "$out" == *"mlx-community/Qwen3.5-4B-MLX-4bit"* ]] \
+  && print "ok: curated falls back to the bundled catalog" \
+  || { print -u2 "FAIL: curated missing bundled models"; print -u2 "$out"; fail=1; }
+[[ -r "$HOME/.cache/marv/mlx/curated-llms.md" ]] \
+  && print "ok: bundled catalog seeded into the cache path" \
+  || { print -u2 "FAIL: cache not seeded"; fail=1; }
+[[ -e "$HOME/.cache/marv/mlx/curated-llms.md.fetched" ]] \
+  && { print -u2 "FAIL: headless verb hit the network"; fail=1; } \
+  || print "ok: headless verb never fetches"
+export MARV_MLX_CATALOG="$tmp/catalog.md"
+
 # --- serve is an alias for run -------------------------------------------------
 # Dispatched to `run`, so an empty call shows run's usage, NOT "unknown command".
 err=$(marv-mlx serve 2>&1 >/dev/null); rc=$?

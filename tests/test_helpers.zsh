@@ -318,6 +318,28 @@ IFS=$'\x1f' read -r t tname title ids tags desc <<< "$legacy2"
 check 't3, vision' "$tags" "catalog: single-token comma list stays tags"
 check '' "$desc" "catalog: tags list has no description"
 
+# Flat id-only catalog: one bare model id per line, no taglines, no blank lines.
+# The trimmed form — tier headers still delimit the ladder.
+cat > "$hub/flat.md" <<'CAT'
+8 GB RAM Tier Models
+acme/One-4B
+acme/Two-4B
+
+16 GB RAM Tier Models
+acme/Three-9B
+acme/Pair-A-9B & acme/Pair-B-9B
+CAT
+flat=$(_marv_mlx_parse_catalog "$hub/flat.md")
+check $'acme/One-4B\nacme/Two-4B\nacme/Three-9B\nacme/Pair-A-9B & acme/Pair-B-9B' \
+  "$(print -r -- "$flat" | awk -F$'\x1f' '{print $4}')" \
+  "catalog: flat id-only lines -> one entry per id"
+check $'8\n16' "$(print -r -- "$flat" | awk -F$'\x1f' '{print $1}' | uniq)" \
+  "catalog: flat id-only keeps tier headers"
+flat1=$(print -r -- "$flat" | sed -n 1p)
+IFS=$'\x1f' read -r t tname title ids tags desc <<< "$flat1"
+check 'acme/One-4B' "$title" "catalog: flat entry name is the id"
+check '' "$desc" "catalog: flat entry has no description"
+
 # Active tier comes from the catalog ladder, never from a hardcoded 8/16/32.
 check 8  "$(_marv_mlx_catalog_active_tier 8 "$hub/cat.md")"  "active tier: 8 GB Mac -> 8"
 check 16 "$(_marv_mlx_catalog_active_tier 18 "$hub/cat.md")" "active tier: 18 GB Mac -> 16"
@@ -356,6 +378,101 @@ check '' "$(_marv_mlx_parse_catalog "$hub/empty.md")" "catalog: empty file -> no
 
 # The US delimiter round-trips a field containing spaces and slashes.
 check 6 "$(print -r -- "$row1" | awk -F$'\x1f' '{print NF}')" "catalog: exactly 6 fields"
+
+# The catalog that ships with the release must parse cleanly, whatever its shape
+# (2-line blocks today, a trimmed id-only list is fine too): one id per entry.
+repo_catalog="${0:A:h}/../curated-llms.md"
+check 0 "$(_marv_mlx_catalog_valid "$repo_catalog"; print $?)" "bundled catalog: valid shape"
+check '' "$(_marv_mlx_parse_catalog "$repo_catalog" | awk -F$'\x1f' '$4 == "" {print "entry without an id"}')" \
+  "bundled catalog: every entry has a model id"
+check 0 "$(_marv_mlx_catalog_active_tier 64 "$repo_catalog" | grep -cE '^[0-9]+$' | grep -q 1; print $?)" \
+  "bundled catalog: has a RAM tier ladder"
+check '' "$(_marv_mlx_parse_catalog "$repo_catalog" | awk -F$'\x1f' '$1 !~ /^[0-9]+$/ {print "tierless row: " $0}')" \
+  "bundled catalog: every row carries a numeric tier"
+
+# --- catalog refresh (network simulated by a curl stub) -----------------------
+cat > "$hub/bundled.md" <<'CAT'
+8 GB RAM Tier Models
+
+acme/Bundled-4B
+Ships with the release
+CAT
+cat > "$hub/upstream.md" <<'CAT'
+8 GB RAM Tier Models
+
+acme/Upstream-4B
+Fetched from main
+CAT
+cat > "$hub/upstream2.md" <<'CAT'
+8 GB RAM Tier Models
+
+acme/Newer-4B
+A later upstream revision
+CAT
+cat > "$hub/bad.md" <<'CAT'
+<!doctype html><title>404</title>
+CAT
+mkdir -p "$hub/sync"
+cache="$hub/sync/curated-llms.md"
+: > "$hub/curl-calls"
+curl() { # stub: copies the staged "upstream" body to curl's -o target
+  local a prev="" out=""
+  for a in "$@"; do [[ "$prev" == "-o" ]] && out="$a"; prev="$a"; done
+  print -r -- call >> "$hub/curl-calls"
+  [[ -n "$out" ]] || return 1
+  cp -f "$hub/$MARV_TEST_UPSTREAM" "$out"
+}
+calls() { wc -l < "$hub/curl-calls" | tr -d ' '; }
+
+export MARV_TEST_UPSTREAM=upstream.md
+_marv_mlx_catalog_sync "$hub/bundled.md" "$cache" "http://stub/catalog" 3600
+check 1 "$(calls)" "catalog sync: first run seeds then fetches"
+check 1 "$(grep -c 'acme/Upstream-4B' "$cache")" "catalog sync: upstream body cached"
+[[ -e "$cache.fetched" ]] && print "ok: catalog sync: attempt stamped" \
+  || { print -u2 "FAIL: catalog sync: no stamp"; fail=1 }
+
+# Within the TTL the cache is served untouched, without any network call.
+export MARV_TEST_UPSTREAM=upstream2.md
+_marv_mlx_catalog_sync "$hub/bundled.md" "$cache" "http://stub/catalog" 3600
+check 1 "$(calls)" "catalog sync: TTL suppresses the fetch"
+check 1 "$(grep -c 'acme/Upstream-4B' "$cache")" "catalog sync: cache kept inside TTL"
+
+# TTL 0 fetches every run; a body that isn't a catalog is rejected (no clobber).
+export MARV_TEST_UPSTREAM=bad.md
+_marv_mlx_catalog_sync "$hub/bundled.md" "$cache" "http://stub/catalog" 0
+check 2 "$(calls)" "catalog sync: TTL 0 fetches again"
+check 1 "$(grep -c 'acme/Upstream-4B' "$cache")" "catalog sync: junk response ignored"
+export MARV_TEST_UPSTREAM=upstream2.md
+_marv_mlx_catalog_sync "$hub/bundled.md" "$cache" "http://stub/catalog" 0
+check 1 "$(grep -c 'acme/Newer-4B' "$cache")" "catalog sync: good body replaces cache"
+
+# TTL 'never' / empty URL mean no network at all.
+_marv_mlx_catalog_sync "$hub/bundled.md" "$cache" "http://stub/catalog" never
+check 3 "$(calls)" "catalog sync: TTL never skips the fetch"
+_marv_mlx_catalog_sync "$hub/bundled.md" "$cache" "" 0
+check 3 "$(calls)" "catalog sync: empty URL skips the fetch"
+
+# A new bundled catalog wins over the fetched cache offline (a release ships
+# knowledge), and re-arms the fetch so upstream can still supersede it later.
+cat > "$hub/bundled2.md" <<'CAT'
+8 GB RAM Tier Models
+
+acme/FromRelease-4B
+New in this release
+CAT
+_marv_mlx_catalog_sync "$hub/bundled2.md" "$cache" "" 3600
+check 1 "$(grep -c 'acme/FromRelease-4B' "$cache")" "catalog sync: new bundled catalog wins"
+[[ -e "$cache.fetched" ]] && { print -u2 "FAIL: catalog sync: stamp not reset"; fail=1; } \
+  || print "ok: catalog sync: stamp reset for the new bundle"
+_marv_mlx_catalog_sync "$hub/bundled2.md" "$cache" "http://stub/catalog" 3600
+check 1 "$(grep -c 'acme/Newer-4B' "$cache")" "catalog sync: refreshed bundle re-arms the fetch"
+
+# Missing bundled catalog + unusable cache = failure (caller falls back itself).
+check 1 "$(_marv_mlx_catalog_sync "$hub/nope.md" "$hub/sync/missing.md" "" 0; print $?)" \
+  "catalog sync: no source -> failure"
+check 1 "$(_marv_mlx_catalog_valid "$hub/bad.md"; print $?)" "catalog valid: junk rejected"
+check 0 "$(_marv_mlx_catalog_valid "$cache"; print $?)" "catalog valid: real catalog accepted"
+unfunction curl
 
 # --- cache footprint helpers --------------------------------------------------
 check "0 B"     "$(_marv_mlx_fmt_bytes 0)"          "fmt 0"

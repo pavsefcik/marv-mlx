@@ -219,6 +219,79 @@ Commands print data on stdout and human logs on stderr, so they compose; pass
 USAGE
 }
 
+# Upstream of the bundled curated catalog. `main` is the live list, so an
+# interactive startup can pick up models added between releases;
+# MARV_MLX_CATALOG_URL overrides it and an empty value disables the refresh.
+_MARV_MLX_CATALOG_URL_DEFAULT="https://raw.githubusercontent.com/pavsefcik/marv-mlx/main/curated-llms.md"
+
+# Is $1 a usable curated catalog? Shape check only: at least one line that STARTS
+# with a model id (`org/name`, optionally '#'-commented or followed by a tagline),
+# so a truncated download or an HTML error page is rejected.
+_marv_mlx_catalog_valid() {
+  local file="$1"
+  [[ -r "$file" && -s "$file" ]] || return 1
+  grep -qE '^[[:space:]]*#?[A-Za-z0-9][^[:space:]]*/[^[:space:]]+' "$file" 2>/dev/null
+}
+
+# Is the last refresh attempt (stamp file $1) older than $2 seconds? A missing
+# stamp is stale. `0` means every run; `never`/`off` disables refreshing.
+_marv_mlx_catalog_stale() {
+  local stamp="$1" ttl="${2:-3600}"
+  [[ "$ttl" == (never|off|no|false) ]] && return 1
+  [[ -e "$stamp" ]] || return 0
+  (( ttl > 0 )) || return 0
+  local now mtime
+  now=$(date +%s 2>/dev/null) || return 0
+  mtime=$(stat -f %m "$stamp" 2>/dev/null || stat -c %Y "$stamp" 2>/dev/null) || return 0
+  [[ "$mtime" == <-> ]] || return 0
+  (( now - mtime >= ttl ))
+}
+
+# Keep the cached curated catalog current.
+#
+#   $1 bundled catalog (ships with the release, read-only)
+#   $2 cache file (what consumers read; also the legacy path sibling tools use)
+#   $3 upstream URL (empty = no network)
+#   $4 refresh TTL in seconds (default 3600)
+#
+# Precedence: a NEW bundled catalog always wins — a release ships knowledge even
+# offline, detected against a `.seed` snapshot of what the cache was seeded
+# from. Otherwise the cache is refreshed from upstream at most once per TTL. A
+# failed fetch never discards a good cache, and it still stamps the attempt so
+# an offline machine pays the timeout at most once per TTL. Returns 0 when the
+# cache file is usable; prints nothing.
+_marv_mlx_catalog_sync() {
+  local bundled="$1" cache="$2" url="$3" ttl="${4:-3600}"
+  local seed="$cache.seed" stamp="$cache.fetched" tmp
+  [[ -n "$cache" ]] || return 1
+  mkdir -p "${cache:h}" 2>/dev/null
+
+  # 1. Seed on first run, and let a newly bundled catalog win (new release).
+  if _marv_mlx_catalog_valid "$bundled" && ! cmp -s "$bundled" "$seed" 2>/dev/null; then
+    cp -f "$bundled" "$cache" 2>/dev/null || true
+    cp -f "$bundled" "$seed" 2>/dev/null || true
+    rm -f "$stamp" 2>/dev/null   # a fresh bundle is worth re-fetching on top of
+  elif ! _marv_mlx_catalog_valid "$cache"; then
+    return 1
+  fi
+
+  # 2. Network refresh (TTL-gated, short timeouts: startup must not hang).
+  if [[ -n "$url" ]] && _marv_mlx_catalog_stale "$stamp" "$ttl"; then
+    tmp=$(mktemp "${TMPDIR:-/tmp}/marv-mlx-catalog.XXXXXX" 2>/dev/null)
+    if [[ -n "$tmp" ]]; then
+      if curl -fsSL --connect-timeout 3 --max-time 5 \
+             -H 'Cache-Control: no-cache' "$url" -o "$tmp" 2>/dev/null \
+         && _marv_mlx_catalog_valid "$tmp"; then
+        mv -f "$tmp" "$cache" 2>/dev/null || cp -f "$tmp" "$cache" 2>/dev/null || true
+      fi
+      rm -f "$tmp" 2>/dev/null
+      : > "$stamp" 2>/dev/null   # stamp success AND failure (see above)
+    fi
+  fi
+
+  _marv_mlx_catalog_valid "$cache"
+}
+
 # Parse the curated catalog (the repo's bundled curated-llms.md) into flat,
 # all-tiers model rows. Emits one US-delimited (\x1f) line per distinct entry:
 #
@@ -235,14 +308,16 @@ USAGE
 # line containing "GB RAM". Entries may be '#'-commented; the marker is stripped
 # so the full catalog shows (the '#' only highlights the hand-picked picks).
 #
-# Current format: blank-line-separated 2-line blocks of
+# Current format: blank-line-separated blocks of
 #
 #   <model-id>
-#   <tagline>
+#   <tagline>            (optional — an id-only catalog is fine)
 #
 # The model id is authoritative and doubles as the entry name; the tagline is a
-# short human description. Legacy shapes are still accepted so an older cached
-# copy keeps working:
+# short human description. An id-only catalog may also list one bare model id
+# per line with no blank lines between entries (see the flush below); that is
+# the trimmed form. Legacy shapes are still accepted so an older cached copy
+# keeps working:
 #   * 3-line title-first:  <title> / <id(s)> / <tags>
 #   * 2-line id/tags:      <id> / <tags>
 #   * leading flag emoji:  "<flag> <id>" (cosmetic, peeled)
@@ -255,6 +330,25 @@ _marv_mlx_parse_catalog() {
   local -a entry=()
   _marv_mlx_catalog_flush() {
     ((${#entry[@]})) || return
+    # Flat id-only block: a trimmed catalog can list one bare model id per line,
+    # with no taglines and no blank lines between entries (' & '-joined pairs are
+    # allowed too). Every line being a bare id is unambiguous, so emit one entry
+    # per line.
+    if (( ${#entry[@]} > 1 )); then
+      local _l _all=1
+      for _l in "${entry[@]}"; do
+        [[ "$_l" == */* && "${_l// & /}" != *[[:space:]]* ]] || { _all=0; break }
+      done
+      if (( _all )); then
+        local -a _ids
+        for _l in "${entry[@]}"; do
+          _ids=( ${(s: & :)_l} )
+          print -r -- "$current_tier${_MARV_MLX_US}$current_tier_name${_MARV_MLX_US}${_ids[1]}${_MARV_MLX_US}${_l}${_MARV_MLX_US}${_MARV_MLX_US}"
+        done
+        entry=()
+        return
+      fi
+    fi
     local a="${entry[1]}" b="${entry[2]:-}" c="${entry[3]:-}"
     entry=()
     [[ -n "$a" ]] || return
