@@ -138,6 +138,26 @@ ports `11500–11509` are a TUI-only feature.
 
 ## Use
 
+The main menu is four groups, top to bottom:
+
+```
+Select model and run:          installed models (● = running)
+──────────────────────
+Download new model:            curated picks for this Mac's RAM tier that
+  org/repo                       aren't installed yet; enter downloads
+  ────────────────────
+  Custom (paste HuggingFace ID)…
+  Open models folder
+  All curated models…          the full Download screen (every tier)
+──────────────────────
+  Basic settings
+  Advanced settings
+  Chat history
+  Restart & refresh
+──────────────────────
+  Stop & quit
+```
+
 - Start model and run — Enter starts the highlighted model and drops straight
   into chat. Installed models are listed by their full HuggingFace id
   (`org/repo`), so a row can be copied as-is into another app. If another model
@@ -157,8 +177,10 @@ ports `11500–11509` are a TUI-only feature.
   returns. `s` or
   `/` searches across all chats, `o` opens the chat folder. Deleted chats are
   gone for good (no trash).
-- Download from the curated list (your RAM tier plus every lower tier) or paste
-  any HuggingFace id. The list ships with the release, and the TUI refreshes a
+- Download from the curated list — the main menu lists the picks for your RAM
+  tier, **All curated models…** opens the full screen (your tier plus every
+  lower tier), and **Custom** takes any HuggingFace id. The list ships with the
+  release, and the TUI refreshes a
   cached copy from `main` on startup (at most once an hour, ~5s timeout, offline
   keeps the last copy), so new hand-picked models show up without waiting for a
   release: `MARV_MLX_CATALOG_TTL` (seconds; `0` = every launch, `never` = off)
