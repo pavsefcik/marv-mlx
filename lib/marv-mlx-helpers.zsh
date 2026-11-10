@@ -254,12 +254,14 @@ _marv_mlx_catalog_stale() {
 #   $3 upstream URL (empty = no network)
 #   $4 refresh TTL in seconds (default 3600)
 #
-# Precedence: a NEW bundled catalog always wins — a release ships knowledge even
+# Precedence: a NEW bundled catalog wins — a release ships knowledge even
 # offline, detected against a `.seed` snapshot of what the cache was seeded
-# from. Otherwise the cache is refreshed from upstream at most once per TTL. A
-# failed fetch never discards a good cache, and it still stamps the attempt so
-# an offline machine pays the timeout at most once per TTL. Returns 0 when the
-# cache file is usable; prints nothing.
+# from. It also stamps the attempt, so the freshly bundled list is served for one
+# TTL before upstream can supersede it (upstream lags a push, and a local catalog
+# edit must not vanish under the next fetch). Otherwise the cache is refreshed
+# from upstream at most once per TTL. A failed fetch never discards a good cache,
+# and it still stamps the attempt so an offline machine pays the timeout at most
+# once per TTL. Returns 0 when the cache file is usable; prints nothing.
 _marv_mlx_catalog_sync() {
   local bundled="$1" cache="$2" url="$3" ttl="${4:-3600}"
   local seed="$cache.seed" stamp="$cache.fetched" tmp
@@ -267,12 +269,19 @@ _marv_mlx_catalog_sync() {
   mkdir -p "${cache:h}" 2>/dev/null
 
   # 1. Seed on first run, and let a newly bundled catalog win (new release).
-  if _marv_mlx_catalog_valid "$bundled" && ! cmp -s "$bundled" "$seed" 2>/dev/null; then
+  if ! _marv_mlx_catalog_valid "$bundled"; then
+    _marv_mlx_catalog_valid "$cache" && return 0
+    return 1
+  fi
+  if ! cmp -s "$bundled" "$seed" 2>/dev/null; then
     cp -f "$bundled" "$cache" 2>/dev/null || true
     cp -f "$bundled" "$seed" 2>/dev/null || true
-    rm -f "$stamp" 2>/dev/null   # a fresh bundle is worth re-fetching on top of
+    : > "$stamp" 2>/dev/null   # serve the new bundle for one TTL (see above)
   elif ! _marv_mlx_catalog_valid "$cache"; then
-    return 1
+    # The cache was deleted or truncated: restore it and clear the stamp so the
+    # network refresh below rebuilds it now instead of after a TTL.
+    cp -f "$bundled" "$cache" 2>/dev/null || true
+    rm -f "$stamp" 2>/dev/null
   fi
 
   # 2. Network refresh (TTL-gated, short timeouts: startup must not hang).

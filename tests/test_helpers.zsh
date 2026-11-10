@@ -426,21 +426,22 @@ calls() { wc -l < "$hub/curl-calls" | tr -d ' '; }
 
 export MARV_TEST_UPSTREAM=upstream.md
 _marv_mlx_catalog_sync "$hub/bundled.md" "$cache" "http://stub/catalog" 3600
-check 1 "$(calls)" "catalog sync: first run seeds then fetches"
-check 1 "$(grep -c 'acme/Upstream-4B' "$cache")" "catalog sync: upstream body cached"
-[[ -e "$cache.fetched" ]] && print "ok: catalog sync: attempt stamped" \
-  || { print -u2 "FAIL: catalog sync: no stamp"; fail=1 }
+check 0 "$(calls)" "catalog sync: first run serves the bundled catalog"
+check 1 "$(grep -c 'acme/Bundled-4B' "$cache")" "catalog sync: cache seeded from the bundle"
+[[ -e "$cache.fetched" ]] && print "ok: catalog sync: seed stamped (no download on launch 1)" \
+  || { print -u2 "FAIL: catalog sync: seed not stamped"; fail=1 }
 
 # Within the TTL the cache is served untouched, without any network call.
-export MARV_TEST_UPSTREAM=upstream2.md
 _marv_mlx_catalog_sync "$hub/bundled.md" "$cache" "http://stub/catalog" 3600
-check 1 "$(calls)" "catalog sync: TTL suppresses the fetch"
-check 1 "$(grep -c 'acme/Upstream-4B' "$cache")" "catalog sync: cache kept inside TTL"
+check 0 "$(calls)" "catalog sync: TTL suppresses the fetch"
+check 1 "$(grep -c 'acme/Bundled-4B' "$cache")" "catalog sync: seeded cache kept inside TTL"
 
-# TTL 0 fetches every run; a body that isn't a catalog is rejected (no clobber).
+# TTL 0 fetches; a body that isn't a catalog is rejected (no clobber).
+_marv_mlx_catalog_sync "$hub/bundled.md" "$cache" "http://stub/catalog" 0
+check 1 "$(calls)" "catalog sync: TTL 0 fetches"
+check 1 "$(grep -c 'acme/Upstream-4B' "$cache")" "catalog sync: upstream body cached"
 export MARV_TEST_UPSTREAM=bad.md
 _marv_mlx_catalog_sync "$hub/bundled.md" "$cache" "http://stub/catalog" 0
-check 2 "$(calls)" "catalog sync: TTL 0 fetches again"
 check 1 "$(grep -c 'acme/Upstream-4B' "$cache")" "catalog sync: junk response ignored"
 export MARV_TEST_UPSTREAM=upstream2.md
 _marv_mlx_catalog_sync "$hub/bundled.md" "$cache" "http://stub/catalog" 0
@@ -452,20 +453,26 @@ check 3 "$(calls)" "catalog sync: TTL never skips the fetch"
 _marv_mlx_catalog_sync "$hub/bundled.md" "$cache" "" 0
 check 3 "$(calls)" "catalog sync: empty URL skips the fetch"
 
-# A new bundled catalog wins over the fetched cache offline (a release ships
-# knowledge), and re-arms the fetch so upstream can still supersede it later.
+# A new bundled catalog wins over the fetched cache (a release ships knowledge)
+# and is served for one TTL, so a lagging upstream (or a local catalog edit) can't
+# overwrite it on the same launch.
 cat > "$hub/bundled2.md" <<'CAT'
 8 GB RAM Tier Models
 
 acme/FromRelease-4B
 New in this release
 CAT
-_marv_mlx_catalog_sync "$hub/bundled2.md" "$cache" "" 3600
-check 1 "$(grep -c 'acme/FromRelease-4B' "$cache")" "catalog sync: new bundled catalog wins"
-[[ -e "$cache.fetched" ]] && { print -u2 "FAIL: catalog sync: stamp not reset"; fail=1; } \
-  || print "ok: catalog sync: stamp reset for the new bundle"
 _marv_mlx_catalog_sync "$hub/bundled2.md" "$cache" "http://stub/catalog" 3600
-check 1 "$(grep -c 'acme/Newer-4B' "$cache")" "catalog sync: refreshed bundle re-arms the fetch"
+check 1 "$(grep -c 'acme/FromRelease-4B' "$cache")" "catalog sync: new bundled catalog wins"
+check 3 "$(calls)" "catalog sync: new bundle not refetched over"
+_marv_mlx_catalog_sync "$hub/bundled2.md" "$cache" "http://stub/catalog" 0
+check 1 "$(grep -c 'acme/Newer-4B' "$cache")" "catalog sync: upstream supersedes after the TTL"
+
+# A deleted cache is restored from the bundle and refreshed immediately.
+rm -f "$cache"
+export MARV_TEST_UPSTREAM=upstream.md
+_marv_mlx_catalog_sync "$hub/bundled2.md" "$cache" "http://stub/catalog" 3600
+check 1 "$(grep -c 'acme/Upstream-4B' "$cache")" "catalog sync: lost cache reseeded + refreshed"
 
 # Missing bundled catalog + unusable cache = failure (caller falls back itself).
 check 1 "$(_marv_mlx_catalog_sync "$hub/nope.md" "$hub/sync/missing.md" "" 0; print $?)" \

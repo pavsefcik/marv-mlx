@@ -42,9 +42,10 @@ print -r -- x > "$hub/models--acme--Torch-Only-7B/snapshots/abc/pytorch_model.bi
 bin="$tmp/bin"
 mkdir -p "$bin"
 for t in gum uvx mlx_vlm.server lsof; do printf '#!/bin/sh\nexit 0\n' > "$bin/$t"; chmod +x "$bin/$t"; done
-# curl always fails fast: the network-using verbs are skipped by design in CLI
-# mode, and the self-update check should not be hit.
-printf '#!/bin/sh\nexit 1\n' > "$bin/curl"; chmod +x "$bin/curl"
+# curl always fails fast (and logs its argv): the network-using verbs are skipped
+# by design in CLI mode, and the self-update check should not be hit.
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$HOME/curl-calls" 2>/dev/null\nexit 1\n' > "$bin/curl"
+chmod +x "$bin/curl"
 export PATH="$bin:$PATH"
 
 # --- Fixture curated catalog (MARV_MLX_CATALOG overrides the bundled one) ------
@@ -155,9 +156,9 @@ out=$(marv-mlx curated 2>/dev/null)
 [[ -r "$HOME/.cache/marv/mlx/curated-llms.md" ]] \
   && print "ok: bundled catalog seeded into the cache path" \
   || { print -u2 "FAIL: cache not seeded"; fail=1; }
-[[ -e "$HOME/.cache/marv/mlx/curated-llms.md.fetched" ]] \
+grep -q 'curated-llms.md' "$HOME/curl-calls" 2>/dev/null \
   && { print -u2 "FAIL: headless verb hit the network"; fail=1; } \
-  || print "ok: headless verb never fetches"
+  || print "ok: headless verb never fetches the catalog"
 export MARV_MLX_CATALOG="$tmp/catalog.md"
 
 # --- serve is an alias for run -------------------------------------------------

@@ -158,8 +158,9 @@ Several agents may run against this repo at once. Keep them from colliding:
   (TTL-gated by `MARV_MLX_CATALOG_TTL`, default 3600s; `0` = every launch,
   `never` = off; `MARV_MLX_CATALOG_URL` overrides, empty disables). Three rules
   matter: a *new* bundled catalog always wins over the cache (compared against
-  the `.seed` snapshot, so a release ships knowledge offline and re-arms the
-  fetch), a failed/invalid download never clobbers a good cache (the attempt is
+  the `.seed` snapshot, so a release ships knowledge offline, and it is served
+  for one TTL so a lagging upstream or a local catalog edit can't overwrite it on
+  the same launch), a failed/invalid download never clobbers a good cache (the attempt is
   still stamped, so an offline machine pays the ~5s timeout at most once per
   TTL), and headless verbs never fetch (`marv-mlx run` is on pi's model_select
   path) — they only read/seed the cache. The cache path is also the legacy path
