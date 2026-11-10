@@ -6,6 +6,18 @@ sync across `VERSION`, `package.json`, and the README.
 
 ## [Unreleased]
 
+## [0.141.1] - 2026-11-10
+
+### Fixed
+
+- **`Download new model:` shows more than one pick.** The main-menu group listed
+  only the curated entries for the Mac's *active* RAM tier, so a machine whose
+  tier had a single uninstalled entry (or none left) saw one row or none — and
+  never saw the smaller-tier picks. It now uses
+  `_marv_mlx_catalog_rows_for_ram`, the same ladder as the Download screen: the
+  active tier plus every lower tier, minus installed models. An 8 GB Mac still
+  shows one (its tier has one entry); 16/32/48 GB Macs see 3/6/8.
+
 ## [0.141.0] - 2026-11-10
 
 ### Added
