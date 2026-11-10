@@ -6,6 +6,57 @@ sync across `VERSION`, `package.json`, and the README.
 
 ## [Unreleased]
 
+## [0.141.0] - 2026-11-10
+
+### Added
+
+- **Curated list refreshes from upstream.** The TUI keeps
+  `~/.cache/marv/mlx/curated-llms.md` current from
+  `https://raw.githubusercontent.com/pavsefcik/marv-mlx/main/curated-llms.md`
+  instead of only copying the bundled `curated-llms.md` when it changes, so
+  hand-picked models added between releases reach the menu without an upgrade.
+  The refresh is TTL-gated (`MARV_MLX_CATALOG_TTL`, default 3600s; `0` = every
+  launch, `never` = off; `MARV_MLX_CATALOG_URL` overrides it) and uses a 3s
+  connect / 5s total timeout. A failed or non-catalog response never replaces a
+  good cache and still stamps the attempt, so an offline machine pays the
+  timeout at most once per TTL; a newly bundled catalog wins immediately and is
+  served for one TTL before upstream can supersede it. Headless verbs
+  (`run`/`stop`/`status`/`curated`) never fetch — they seed from the bundled
+  list and read the cache. `MARV_MLX_CATALOG` still points at a custom list and
+  disables the refresh.
+- **Inline downloads from the main menu.** A curated row downloads straight from
+  the menu, through the same flow as the Download screen (HF-token offer, GGUF
+  guard, offer to start the model). `Custom (paste HuggingFace ID)` does the same
+  for any id.
+
+### Changed
+
+- **New main-menu layout.** The TUI is four groups: `Select model and run:`
+  (installed models), `Download new model:` (the curated picks for this Mac's RAM
+  tier that aren't installed yet, plus `Custom (paste HuggingFace ID)` and
+  `Open models folder`), the settings group (`Basic settings`, `Advanced
+  settings`, `Chat history`, `Restart & refresh`), and `Stop & quit` on its own.
+  Section headers and rules are not navigable. `Update to latest version` still
+  appears above the lifecycle group when a newer release exists. The full
+  multi-tier Download screen is no longer listed in the menu; its code and the
+  `download_all` action remain, so re-listing one row brings it back.
+- **Trimmed, id-only curated catalog.** `curated-llms.md` is now RAM tier headers
+  plus bare HuggingFace ids — no taglines — retiered to 8/16/32/48 GB with eight
+  entries: Qwen3.5 4B/9B, Qwen3.8 27B, Qwen3.6 35B-A3B, Gemma 4 12B/26B-A4B/31B
+  QAT OptiQ and ThinkingCap 27B DWQ. (It replaces the larger, tagline-bearing
+  catalog from the previous release.) The Download menu and `marv-mlx curated`
+  show ids alone.
+- **The catalog parser accepts a trimmed id-only list** — one bare model id per
+  line, no taglines, no blank-line separators (paired `a & b` lines still work).
+  Taglines stay optional and the legacy 2-line/3-line shapes still parse.
+
+### Fixed
+
+- **Extension finds the checkout again.** `extensions/marv-mlx.ts` resolved the
+  dev-fallback clone only at `~/Dev/projects/marv-mlx`, which no longer exists on
+  the author's machine; it now tries `~/Code/projects/marv-mlx` then the old
+  path (`MARV_MLX_REPO` still overrides).
+
 ## [0.140.0] - 2026-10-28
 
 ### Changed
