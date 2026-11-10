@@ -174,8 +174,9 @@ Several agents may run against this repo at once. Keep them from colliding:
   doctor` fails if the pin/`--force`/`setproctitle`/uv-URL/gum-pin drift apart.
   Two deliberate
   divergences remain: it does **not** copy `lib/sitecustomize.py` (the
-  process-rename payload), so that feature no-ops on a pi copy, and it hardcodes
-  a dev-fallback repo path `~/Dev/projects/marv-mlx`.
+  process-rename payload), so that feature no-ops on a pi copy, and it resolves
+  the dev-fallback repo path by trying `~/Code/projects/marv-mlx` then
+  `~/Dev/projects/marv-mlx` (`MARV_MLX_REPO` overrides).
 - **Never name a zsh local `path`.** `path` is the special array tied to `PATH`,
   so `local path="$1"` silently replaces your command search path for the rest
   of the function (it surfaced as `command not found: awk` inside

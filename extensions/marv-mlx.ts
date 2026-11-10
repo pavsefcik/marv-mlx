@@ -193,7 +193,10 @@ async function findMarvMlxZsh(): Promise<string | undefined> {
   const roots = [
     process.env.MARV_MLX_REPO,
     MARV_MLX_CLONE,
-    join(homedir(), "Dev", "projects", "marv-mlx"), // local clone (dev fallback)
+    // Local checkout (dev fallback): the author's usual location first, then the
+    // older one, so a moved clone still resolves.
+    join(homedir(), "Code", "projects", "marv-mlx"),
+    join(homedir(), "Dev", "projects", "marv-mlx"),
   ];
   for (const root of roots) {
     if (!root) continue;
