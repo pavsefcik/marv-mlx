@@ -157,8 +157,13 @@ ports `11500–11509` are a TUI-only feature.
   returns. `s` or
   `/` searches across all chats, `o` opens the chat folder. Deleted chats are
   gone for good (no trash).
-- Download from the bundled curated list (your RAM tier plus every lower tier)
-  or paste any HuggingFace id
+- Download from the curated list (your RAM tier plus every lower tier) or paste
+  any HuggingFace id. The list ships with the release, and the TUI refreshes a
+  cached copy from `main` on startup (at most once an hour, ~5s timeout, offline
+  keeps the last copy), so new hand-picked models show up without waiting for a
+  release: `MARV_MLX_CATALOG_TTL` (seconds; `0` = every launch, `never` = off)
+  tunes it, `MARV_MLX_CATALOG_URL` points it elsewhere, and `MARV_MLX_CATALOG`
+  replaces the file outright (no refresh). Headless verbs never fetch.
 - Ministral models are shipped as Instruct+Reasoning pairs: downloading a
   Ministral entry fetches both halves, the menu shows a single
   `Ministral-3-xB-4bit` entry, and `tab` swaps between the Instruct and
@@ -183,7 +188,6 @@ set in **Basic settings → MoE cache (GB)** (or `MARV_MLX_MOE_CACHE_GB` in
 `config.zsh`). A bigger budget means fewer SSD reads.
 
 The curated 48 GB entry `mlx-community/Ornith-1.5-35B-A3B-OptiQ-4bit`
-("Large MoE optimized for agentic coding, tool calling, and multi-step tasks")
 is built for this path: Ornith is built on Qwen, and its
 OptiQ mixed 4/8-bit checkpoint streams per projection (the engine reads each
 projection's own quantization parameters).

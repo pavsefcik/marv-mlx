@@ -24,9 +24,10 @@ models in-pi and runs a headless `marv-mlx run`.
 
 - `marv-mlx.zsh` — the whole TUI (one large file, ~2300 lines / ~85KB). Read it
   in full before wide-ranging edits.
-- `curated-llms.md` — the bundled curated catalog (RAM tier headers +
-  blank-line-separated 2-line id/tagline blocks). Edit this to change the
-  Download menu / `marv-mlx curated`. `MARV_MLX_CATALOG` overrides the path.
+- `curated-llms.md` — the bundled curated catalog (RAM tier headers + blocks of
+  `<model-id>` and an optional tagline). Edit this to change the Download menu /
+  `marv-mlx curated`; a trimmed id-only list (one bare id per line, no taglines,
+  no blank lines) parses too. `MARV_MLX_CATALOG` overrides the path.
 - `marv-mlx-launcher.zsh` — sourced from `~/.zshrc`; provides the `marv-mlx` shell entry.
 - `install.sh` — standalone installer (uv via Astral's installer, `gum` via its
   sha256-checked release binary, `mlx-vlm` as a uv tool — no Xcode CLT, no
@@ -150,6 +151,19 @@ Several agents may run against this repo at once. Keep them from colliding:
 
 ## Known pitfalls
 
+- **The curated catalog refreshes at runtime.** The bundled `curated-llms.md` is
+  only a seed: interactive startup calls `_marv_mlx_catalog_sync`
+  (`lib/marv-mlx-helpers.zsh`), which keeps `~/.cache/marv/mlx/curated-llms.md`
+  current from `https://raw.githubusercontent.com/pavsefcik/marv-mlx/main/curated-llms.md`
+  (TTL-gated by `MARV_MLX_CATALOG_TTL`, default 3600s; `0` = every launch,
+  `never` = off; `MARV_MLX_CATALOG_URL` overrides, empty disables). Three rules
+  matter: a *new* bundled catalog always wins over the cache (compared against
+  the `.seed` snapshot, so a release ships knowledge offline and re-arms the
+  fetch), a failed/invalid download never clobbers a good cache (the attempt is
+  still stamped, so an offline machine pays the ~5s timeout at most once per
+  TTL), and headless verbs never fetch (`marv-mlx run` is on pi's model_select
+  path) — they only read/seed the cache. The cache path is also the legacy path
+  the sibling marv harness reads, so keep writing it there.
 - **`extensions/marv-mlx.ts` must stay in sync with `install.sh`.** As of the
   parity pass it resolves `uv tool dir [--bin]`, installs
   `mlx-vlm@0.7.4 --with jinja2 --with setproctitle --force` (retried 3×), writes
@@ -202,7 +216,9 @@ Several agents may run against this repo at once. Keep them from colliding:
   `fs.cp` recursively).
 - **Hidden global side effects on launch:** `HF_TOKEN` is injected from
   `~/.cache/huggingface/token` and `HF_HUB_DISABLE_SHARED_BLOBS=1` is exported.
-- **raw.githubusercontent.com CDN lags `main`.** After pushing, the one-liner
+- **raw.githubusercontent.com CDN lags `main`.** The catalog refresh reads that
+  same host (with `Cache-Control: no-cache`), so a just-pushed catalog entry can
+  take a few minutes to reach clients. After pushing, the one-liner
   `curl -fsSL .../marv-mlx/main/install.sh | sh` may serve a stale commit for a
   while. For a guaranteed-correct test, pin the URL to the full commit SHA:
   `.../pavsefcik/marv-mlx/<full-sha>/install.sh`. Verify content (e.g.
